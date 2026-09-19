@@ -99,7 +99,15 @@ if (-not $FfmpegZip) {
     $ProgressPreference = 'SilentlyContinue'
     Invoke-WebRequest -Uri $url -OutFile $FfmpegZip -UseBasicParsing
 }
-$hash = (Get-FileHash $FfmpegZip -Algorithm SHA256).Hash.ToLowerInvariant()
+# Get-FileHash helyett .NET: a CI a pwsh 7 PSModulePath-jával indítja a 5.1-et, ott a cmdlet nem töltődik be
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$stream = [System.IO.File]::OpenRead($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($FfmpegZip))
+try {
+    $hash = -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') })
+} finally {
+    $stream.Dispose()
+    $sha.Dispose()
+}
 if ($hash -ne $ffmpegSha256) { throw "Az ffmpeg zip SHA256-a nem egyezik: $hash" }
 
 # Csak a statikus ffmpeg.exe és a licence kell (GPL, ezért a licenc is a csomagba kerül)
