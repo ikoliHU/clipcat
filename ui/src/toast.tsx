@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertIcon, CheckIcon } from "./components/icons";
+import { AlertIcon, CheckIcon, DownloadIcon } from "./components/icons";
 import { cx } from "./lib/format";
 import { listen } from "./lib/tauri";
 import type { Toast as ToastPayload } from "./lib/tauri";
@@ -16,7 +16,7 @@ function Toast() {
   }, []);
 
   if (!toast) return null;
-  const error = toast.kind === "error";
+  const { kind } = toast;
   return (
     <div
       key={toast.id}
@@ -25,14 +25,16 @@ function Toast() {
       <div
         className={cx(
           "grid size-[38px] flex-none place-items-center rounded-full [&_svg]:size-[22px]",
-          error ? "bg-[rgba(239,68,68,.16)] text-[#f87171]" : "bg-[rgba(74,222,128,.16)] text-[#4ade80]",
+          kind === "error" && "bg-[rgba(239,68,68,.16)] text-[#f87171]",
+          kind === "ok" && "bg-[rgba(74,222,128,.16)] text-[#4ade80]",
+          kind === "pending" && "bg-[rgba(96,165,250,.16)] text-[#60a5fa]",
         )}
       >
-        {error ? <AlertIcon /> : <CheckIcon />}
+        {kind === "error" ? <AlertIcon /> : kind === "pending" ? <DownloadIcon className="animate-pulse" /> : <CheckIcon />}
       </div>
       <div className="min-w-0 leading-[1.35]">
         <div className="text-[15px] font-semibold">{toast.title}</div>
-        <div className="truncate text-[12.5px] text-[#a1a5ae]">{toast.detail}</div>
+        {toast.detail && <div className="truncate text-[12.5px] text-[#a1a5ae]">{toast.detail}</div>}
       </div>
     </div>
   );

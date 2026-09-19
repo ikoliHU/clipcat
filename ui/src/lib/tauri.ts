@@ -67,7 +67,7 @@ export interface UpdateState {
 }
 
 export interface Toast {
-  kind: "ok" | "error";
+  kind: "ok" | "error" | "pending";
   title: string;
   detail: string;
 }

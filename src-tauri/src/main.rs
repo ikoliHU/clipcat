@@ -358,17 +358,21 @@ fn request_save(app: &AppHandle) -> Result<(), String> {
     let result = if !status.obs_installed {
         Err(t("error.engineMissing"))
     } else {
-        *st.pending_folder.lock().unwrap() = Some(games::folder_for(platform::foreground_window()));
+        let folder = games::folder_for(platform::foreground_window());
+        *st.pending_folder.lock().unwrap() = Some(folder.clone());
         match st.engine.lock().unwrap().as_ref() {
-            Some(engine) => engine.save(),
+            Some(engine) => engine.save().map(|()| folder),
             None => Err(t("error.engineNotRunning")),
         }
     };
-    if let Err(e) = &result {
-        logfile::write(&format!("Mentés sikertelen: {e}"));
-        show_toast(app, "error", &t("toast.saveFailed"), e);
+    match &result {
+        Ok(folder) => show_toast(app, "pending", &t("toast.clipSaving"), folder),
+        Err(e) => {
+            logfile::write(&format!("Mentés sikertelen: {e}"));
+            show_toast(app, "error", &t("toast.saveFailed"), e);
+        }
     }
-    result
+    result.map(|_| ())
 }
 
 /// Kézi felvétel indítása vagy leállítása (a leállítás a fájl lezárásáig tart, ezért nem a fő szálon fut).
@@ -379,6 +383,8 @@ fn toggle_recording(app: &AppHandle) {
         match engine.as_mut() {
             None => Err(t("error.engineNotRunning")),
             Some(e) if e.recording_active() => {
+                // A leállítás a fájl lezárásáig tart, ezért előtte jelezzük, hogy a mentés elkezdődött
+                show_toast(app, "pending", &t("toast.recordingSaving"), "");
                 e.stop_recording();
                 Ok(None)
             }
@@ -487,7 +493,8 @@ fn show_toast(app: &AppHandle, kind: &str, title: &str, detail: &str) {
         let s = st.settings.lock().unwrap();
         (s.show_notification || kind == "error", s.notification_sound)
     };
-    if sound {
+    // A folyamatban lévő mentés nem sípol, csak a végeredmény
+    if sound && kind != "pending" {
         platform::beep(kind == "error");
     }
     if !show {
