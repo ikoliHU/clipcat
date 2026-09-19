@@ -206,7 +206,10 @@ button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-c
 }
 .tile:focus-visible .thumb { box-shadow: 0 0 0 2px var(--focus), 0 12px 28px rgba(0, 0, 0, .45); }
 .tile:active .thumb { transform: scale(.98); transition-duration: 100ms; }
-.thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb img, .thumb video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb img[hidden] { display: none; }
+.thumb video { opacity: 0; transition: opacity 150ms var(--ease); }
+.thumb video.playing { opacity: 1; }
 .badge {
   position: absolute; bottom: 8px; right: 8px; padding: 2px 7px; border-radius: 6px;
   background: rgba(0, 0, 0, .55);

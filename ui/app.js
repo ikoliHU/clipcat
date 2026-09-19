@@ -139,21 +139,167 @@ $("#open-folder").addEventListener("click", () => invoke("open_output_folder"));
 
 // ---------- Galéria ----------
 
-const thumbObserver = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    thumbObserver.unobserve(entry.target);
-    loadThumb(entry.target);
+// Az előnézet állókép (JPEG), nem élő videó: a csempék nem tartanak nyitva dekódert.
+// A képet egy rejtett videóból rajzoljuk ki, egyszerre legfeljebb THUMB_WORKERS darabot,
+// és csak a képernyőn (vagy közelében) lévő csempékhez. Az eredmény IndexedDB-be kerül.
+const THUMB_WORKERS = 2;
+const THUMB_TIMEOUT_MS = 15000;
+const THUMB_WIDTH = 480;
+const HOVER_DELAY_MS = 200;
+const previewTime = (duration) => (isFinite(duration) ? Math.min(3, duration * 0.15) : 0);
+
+const thumbCache = new Map(); // tileKey -> { blob, duration }
+const thumbFailed = new Set(); // ebben a munkamenetben nem sikerült; nem próbáljuk újra
+const thumbQueue = new Set(); // előnézetre váró, látható csempék
+let thumbActive = 0;
+
+const thumbDb = new Promise((resolve, reject) => {
+  const req = indexedDB.open("clipcat", 1);
+  req.onupgradeneeded = () => req.result.createObjectStore("thumbs");
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+});
+
+function thumbStore(mode, action) {
+  return thumbDb.then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction("thumbs", mode);
+    action(tx.objectStore("thumbs"));
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+// Indításkor egyszer beolvassa a tárolt előnézeteket; ha az IndexedDB nem elérhető, csak memóriában gyorsítótáraz
+const thumbCacheReady = thumbStore("readonly", (store) => {
+  store.openCursor().onsuccess = (e) => {
+    const cursor = e.target.result;
+    if (!cursor) return;
+    thumbCache.set(cursor.key, cursor.value);
+    cursor.continue();
+  };
+}).catch(() => {});
+
+function pruneThumbCache(keep) {
+  const stale = [...thumbCache.keys()].filter((key) => !keep.has(key));
+  if (!stale.length) return;
+  for (const key of stale) thumbCache.delete(key);
+  thumbStore("readwrite", (store) => stale.forEach((key) => store.delete(key))).catch(() => {});
+}
+
+// Egy rejtett videóból kivesz egy képkockát; minden ágon elengedi a videót
+function captureThumb(path) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.preload = "auto";
+    video.crossOrigin = "anonymous"; // enélkül a canvas "szennyezett" lenne, és a toBlob hibát dobna
+    let done = false;
+    const finish = (err, result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.removeAttribute("src");
+      video.load();
+      err ? reject(err) : resolve(result);
+    };
+    const timer = setTimeout(() => finish(new Error("timeout")), THUMB_TIMEOUT_MS);
+    const draw = () => {
+      if (!video.videoWidth) return finish(new Error("no video track"));
+      const canvas = document.createElement("canvas");
+      canvas.width = THUMB_WIDTH;
+      canvas.height = Math.round((THUMB_WIDTH * video.videoHeight) / video.videoWidth);
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      const duration = video.duration;
+      canvas.toBlob((blob) => (blob ? finish(null, { blob, duration }) : finish(new Error("encode failed"))), "image/jpeg", 0.8);
+    };
+    video.addEventListener("error", () => finish(video.error || new Error("load failed")), { once: true });
+    video.addEventListener("loadedmetadata", () => {
+      const at = previewTime(video.duration);
+      if (at > 0) {
+        video.addEventListener("seeked", draw, { once: true });
+        video.currentTime = at;
+      } else {
+        video.addEventListener("loadeddata", draw, { once: true });
+      }
+    }, { once: true });
+    video.src = convertFileSrc(path);
+  });
+}
+
+function applyThumb(tile, { blob, duration }) {
+  const img = tile.querySelector("img");
+  if (img.src) URL.revokeObjectURL(img.src);
+  img.src = URL.createObjectURL(blob);
+  img.hidden = false;
+  tile.querySelector(".badge").textContent = formatDuration(duration);
+}
+
+function pumpThumbs() {
+  while (thumbActive < THUMB_WORKERS && thumbQueue.size) {
+    const tile = thumbQueue.values().next().value;
+    thumbQueue.delete(tile);
+    thumbObserver.unobserve(tile);
+    thumbActive++;
+    generateThumb(tile).finally(() => {
+      thumbActive--;
+      pumpThumbs();
+    });
   }
+}
+
+async function generateThumb(tile) {
+  const key = tile.dataset.key;
+  try {
+    const thumb = await captureThumb(tile.dataset.path);
+    thumbCache.set(key, thumb);
+    if (tiles.get(key) === tile) applyThumb(tile, thumb);
+    thumbStore("readwrite", (store) => store.put(thumb, key)).catch(() => {});
+  } catch (e) {
+    thumbFailed.add(key);
+    console.warn("thumbnail failed", tile.dataset.path, e);
+  }
+}
+
+// A képernyőről elgörgetett csempe kikerül a sorból, így a gyors görgetés nem halmoz fel munkát
+const thumbObserver = new IntersectionObserver((entries) => {
+  for (const { target, isIntersecting } of entries) {
+    if (isIntersecting) thumbQueue.add(target);
+    else thumbQueue.delete(target);
+  }
+  pumpThumbs();
 }, { rootMargin: "300px" });
 
-function loadThumb(tile) {
-  const video = tile.querySelector("video");
-  video.addEventListener("loadedmetadata", () => {
-    tile.querySelector(".badge").textContent = formatDuration(video.duration);
-    video.currentTime = Math.min(3, video.duration * 0.15);
-  }, { once: true });
-  video.src = convertFileSrc(tile.dataset.path);
+// Egyszerre legfeljebb egy lejátszó előnézet él; elhagyáskor teljesen felszabadul
+let hover = null; // { tile, video, timer }
+
+function stopHover() {
+  if (!hover) return;
+  clearTimeout(hover.timer);
+  if (hover.video) {
+    hover.video.pause();
+    hover.video.removeAttribute("src");
+    hover.video.load();
+    hover.video.remove();
+  }
+  hover = null;
+}
+
+function startHover(tile) {
+  stopHover();
+  const current = { tile, video: null, timer: 0 };
+  current.timer = setTimeout(() => {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.loop = true;
+    video.addEventListener("loadedmetadata", () => { video.currentTime = previewTime(video.duration); }, { once: true });
+    video.addEventListener("playing", () => video.classList.add("playing"), { once: true });
+    video.src = convertFileSrc(tile.dataset.path);
+    tile.querySelector(".thumb").insertBefore(video, tile.querySelector(".badge"));
+    current.video = video;
+    video.play().catch(() => {});
+  }, HOVER_DELAY_MS);
+  hover = current;
 }
 
 function renderChips() {
@@ -178,22 +324,22 @@ function createTile(clip) {
   tile.className = "tile";
   tile.tabIndex = 0;
   tile.dataset.path = clip.path;
+  tile.dataset.key = tileKey(clip);
   tile.innerHTML = `
-    <div class="thumb"><video muted preload="metadata" playsinline></video><span class="badge"></span></div>
+    <div class="thumb"><img alt="" decoding="async" hidden><span class="badge"></span></div>
     <div class="meta"><div class="title"></div><div class="sub"></div></div>`;
   tile.querySelector(".title").textContent = clip.game || clip.name;
   tile.querySelector(".sub").textContent = `${formatDate(clip.modified)} · ${formatSize(clip.size)}`;
   tile.title = clip.name;
 
-  const video = tile.querySelector("video");
-  tile.addEventListener("mouseenter", () => { if (video.src) video.play().catch(() => {}); });
-  tile.addEventListener("mouseleave", () => {
-    video.pause();
-    if (isFinite(video.duration)) video.currentTime = Math.min(3, video.duration * 0.15);
-  });
+  tile.addEventListener("mouseenter", () => startHover(tile));
+  tile.addEventListener("mouseleave", () => { if (hover?.tile === tile) stopHover(); });
   tile.addEventListener("click", () => openPlayer(clip));
   tile.addEventListener("keydown", (e) => { if (e.key === "Enter") openPlayer(clip); });
-  thumbObserver.observe(tile);
+
+  const cached = thumbCache.get(tile.dataset.key);
+  if (cached) applyThumb(tile, cached);
+  else if (!thumbFailed.has(tile.dataset.key)) thumbObserver.observe(tile);
   return tile;
 }
 
@@ -207,18 +353,20 @@ function tileFor(clip) {
   return tile;
 }
 
-// A már nem létező klipek csempéit (és a videójukat) elengedi
+// A már nem létező klipek csempéit, képét és tárolt előnézetét elengedi
 function pruneTiles() {
   const keep = new Set(clips.map(tileKey));
   for (const [key, tile] of tiles) {
     if (keep.has(key)) continue;
     thumbObserver.unobserve(tile);
-    const video = tile.querySelector("video");
-    video.removeAttribute("src");
-    video.load();
+    thumbQueue.delete(tile);
+    if (hover?.tile === tile) stopHover();
+    const img = tile.querySelector("img");
+    if (img.src) URL.revokeObjectURL(img.src);
     tile.remove();
     tiles.delete(key);
   }
+  pruneThumbCache(keep);
 }
 
 function renderGrid() {
@@ -243,7 +391,8 @@ function renderClips() {
 }
 
 async function loadClips() {
-  clips = await invoke("list_clips");
+  const [list] = await Promise.all([invoke("list_clips"), thumbCacheReady]);
+  clips = list;
   renderClips();
 }
 
@@ -252,6 +401,7 @@ $("#refresh").addEventListener("click", loadClips);
 // ---------- Lejátszó ----------
 
 function openPlayer(clip) {
+  stopHover();
   currentClip = clip;
   $("#player-title").textContent = clip.name;
   $("#player-sub").textContent = `${gameOf(clip)} · ${formatDate(clip.modified)} · ${formatSize(clip.size)}`;
