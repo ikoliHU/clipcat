@@ -115,9 +115,15 @@ fn engine_config(s: &Settings) -> engine::Config {
     } else {
         settings::parse_resolution(&s.resolution).unwrap_or((1920, 1080))
     };
+    // Ffmpeg nélkül (pl. sérült telepítés) a memóriás puffer marad, hogy a mentés működjön
+    let disk = s.buffer_storage == "disk";
+    if disk && !engine::disk_buffer_available() {
+        logfile::write("Lemezes puffer beállítva, de nincs ffmpeg: memóriás puffer");
+    }
     engine::Config {
         output_dir: s.output_dir.clone(),
         buffer_seconds: s.buffer_seconds,
+        buffer_dir: (disk && engine::disk_buffer_available()).then(|| s.buffer_dir.clone()),
         base,
         output,
         fps: s.fps,
@@ -202,6 +208,10 @@ fn on_engine_event(app: &AppHandle, event: engine::Event) {
             show_toast(app, "error", &t("toast.recordingStopped"), &tf("toast.errorCode", &[("code", &code)]));
         }
         engine::Event::Saved(None) => show_toast(app, "error", &t("toast.saveFailed"), &t("toast.savedClipMissing")),
+        engine::Event::SaveFailed(e) => {
+            logfile::write(&format!("Mentés sikertelen: {e}"));
+            show_toast(app, "error", &t("toast.saveFailed"), &e);
+        }
         engine::Event::Stopped(code) if code != 0 => {
             logfile::write(&format!("A rögzítés leállt, kód: {code}"));
             show_toast(app, "error", &t("toast.captureStopped"), &t("status.restarting"));
@@ -722,6 +732,9 @@ async fn list_clips(app: AppHandle) -> Vec<Clip> {
 async fn save_settings(app: AppHandle, settings: Settings) -> Result<String, String> {
     settings.validate()?;
     parse_hotkeys(&settings)?;
+    if settings.buffer_storage == "disk" && !engine::disk_buffer_available() {
+        return Err(t("validate.diskUnavailable"));
+    }
 
     let st = state(&app);
     let old = current_settings(&app);
@@ -779,6 +792,11 @@ fn list_mics(app: AppHandle) -> Vec<Mic> {
         .as_ref()
         .map(|e| e.list_mics().into_iter().map(|(id, name)| Mic { id, name }).collect())
         .unwrap_or_default()
+}
+
+#[tauri::command]
+fn disk_buffer_available() -> bool {
+    engine::disk_buffer_available()
 }
 
 #[tauri::command]
@@ -876,16 +894,20 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 
 // ---------- Önteszt ----------
 
-/// `ClipCat.exe --selftest <mappa>`: felület nélkül elindítja a motort, 8 másodperc után
-/// ment, és az eredményt a mappába írja (selftest.txt). A normál példánytól függetlenül fut.
-fn run_selftest(dir: &str) -> i32 {
+/// `ClipCat.exe --selftest <mappa> [másodperc]`: felület nélkül elindítja a motort, a megadott idő
+/// (alapból 8 s) után ment, és az eredményt a mappába írja (selftest.txt). A normál példánytól
+/// függetlenül fut.
+fn run_selftest(dir: &str, seconds: u64) -> i32 {
     logfile::init("selftest.log");
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = Mutex::new(tx);
     engine::set_event_handler(move |event| {
-        if let engine::Event::Saved(path) = event {
-            let _ = tx.lock().unwrap().send(path);
-        }
+        let result = match event {
+            engine::Event::Saved(path) => path.ok_or_else(|| "a mentett fájl útvonala nem elérhető".to_string()),
+            engine::Event::SaveFailed(e) => Err(e),
+            _ => return,
+        };
+        let _ = tx.lock().unwrap().send(result);
     });
     let mut s = settings::load();
     s.output_dir = dir.to_string();
@@ -902,12 +924,10 @@ fn run_selftest(dir: &str) -> i32 {
             return 1;
         }
     };
-    std::thread::sleep(Duration::from_secs(8));
+    std::thread::sleep(Duration::from_secs(seconds));
     let active = engine.replay_active();
     let result = engine.save().and_then(|_| {
-        rx.recv_timeout(Duration::from_secs(30))
-            .map_err(|_| "nem jött mentési jelzés".to_string())?
-            .ok_or_else(|| "a mentett fájl útvonala nem elérhető".to_string())
+        rx.recv_timeout(Duration::from_secs(30)).map_err(|_| "nem jött mentési jelzés".to_string())?
     });
     engine.shutdown();
     match result {
@@ -943,7 +963,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--selftest") {
         let dir = args.get(i + 1).cloned().unwrap_or_else(|| ".".into());
-        std::process::exit(run_selftest(&dir));
+        let seconds = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(8);
+        std::process::exit(run_selftest(&dir, seconds));
     }
     let autostarted = args.iter().any(|a| a == "--autostart");
     let settings = settings::load();
@@ -1042,6 +1063,7 @@ fn main() {
             toggle_record,
             set_replay_enabled,
             list_mics,
+            disk_buffer_available,
             open_clip,
             reveal_clip,
             delete_clip,

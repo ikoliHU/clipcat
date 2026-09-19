@@ -85,6 +85,25 @@ fn sync_file(src: &Path, dst: &Path) {
     }
 }
 
+/// A lemezes puffer vágója: a motormappába csomagolt statikus ffmpeg.exe (bundle-obs.ps1)
+pub fn ffmpeg() -> Option<PathBuf> {
+    let bundled = exe_dir().join(r"obs\ffmpeg\ffmpeg.exe");
+    bundled.exists().then_some(bundled)
+}
+
+/// Lezárta-e már a muxer a fájlt: amíg nyitva tartja, kizárólagosan nem nyitható meg.
+pub fn file_closed(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).share_mode(0).open(path).is_ok()
+}
+
+/// Ne villanjon fel konzolablak a segédprogram futtatásakor
+pub fn hide_console(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
 pub fn before_startup(_lib: &libloading::Library) -> Result<(), String> {
     Ok(())
 }

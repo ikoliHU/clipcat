@@ -75,6 +75,22 @@ pub fn open(layout: &Layout) -> Result<Library, String> {
     unsafe { Library::new(&layout.lib) }.map_err(|e| tf("engine.dllLoad", &[("error", &e)]))
 }
 
+/// A lemezes puffer vágója: a rendszer ffmpeg-je (a deb/rpm függősége)
+pub fn ffmpeg() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain([PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")])
+        .map(|dir| dir.join("ffmpeg"))
+        .find(|p| p.is_file())
+}
+
+/// Linuxon nincs kötelező zárolás; a hívó előtte már várt a lezárásra.
+pub fn file_closed(_path: &std::path::Path) -> bool {
+    true
+}
+
+pub fn hide_console(_cmd: &mut std::process::Command) {}
+
 /// A libobs grafikus rétege a startup előtt tudni akarja, milyen kijelzőszerveren fut.
 pub fn before_startup(lib: &Library) -> Result<(), String> {
     unsafe {

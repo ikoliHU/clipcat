@@ -4,10 +4,10 @@
     "targets": ["deb", "rpm", "appimage"],
     "linux": {
       "deb": {
-        "depends": ["obs-studio"]
+        "depends": ["obs-studio", "ffmpeg"]
       },
       "rpm": {
-        "depends": ["obs-studio"]
+        "depends": ["obs-studio", "/usr/bin/ffmpeg"]
       }
     }
   }

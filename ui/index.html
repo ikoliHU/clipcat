@@ -80,6 +80,17 @@
                 <div class="control"><input type="range" name="bufferSeconds" min="30" max="600" step="10"><span class="value" id="buffer-value"></span></div>
               </div>
               <div class="row">
+                <div class="label"><span data-i18n="settings.storage.label"></span><div class="hint" id="storage-hint"></div></div>
+                <div class="control"><select name="bufferStorage">
+                  <option value="memory" data-i18n="settings.storage.memory"></option>
+                  <option value="disk" id="storage-disk" data-i18n="settings.storage.disk"></option>
+                </select></div>
+              </div>
+              <div class="row" id="buffer-dir-row">
+                <div class="label"><span data-i18n="settings.bufferDir.label"></span><div class="hint" id="buffer-dir-hint"></div></div>
+                <div class="control"><input type="text" class="wide" name="bufferDir"><button type="button" class="btn" id="browse-buffer" data-i18n="settings.browse"></button></div>
+              </div>
+              <div class="row">
                 <div class="label"><span data-i18n="settings.resolution.label"></span></div>
                 <div class="control"><select name="resolution">
                   <option value="native" data-i18n="settings.resolution.native"></option>

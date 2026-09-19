@@ -465,9 +465,17 @@ async function loadMics(selected) {
   select.replaceChildren(...options.map(([id, name]) => new Option(name, id)));
 }
 
+// Ffmpeg nélkül a lemezes puffer nem választható (a már beállított érték látszik, de nem menthető)
+async function loadStorageOptions() {
+  const available = await invoke("disk_buffer_available").catch(() => false);
+  const option = $("#storage-disk");
+  option.disabled = !available;
+  option.textContent = t(available ? "settings.storage.disk" : "settings.storage.diskMissing");
+}
+
 async function fillForm() {
   if (!settings) return;
-  await loadMics(settings.micDevice);
+  await Promise.all([loadMics(settings.micDevice), loadStorageOptions()]);
   draft = structuredClone(settings);
   for (const el of form.elements) {
     if (!el.name || !(el.name in draft)) continue;
@@ -515,6 +523,9 @@ function updateDerived() {
   $("#buffer-value").textContent = formatDuration(buffer);
   $("#bitrate-value").textContent = `${bitrate} Mbps`;
   $("#size-hint").textContent = t("settings.bitrate.sizeHint", { duration: formatDuration(buffer), size: Math.round((buffer * bitrate) / 8) });
+  $("#storage-hint").textContent = t("settings.storage.hint", { size: Math.round((buffer * bitrate) / 8) });
+  $("#buffer-dir-hint").textContent = t("settings.bufferDir.hint", { size: Math.round((bitrate * 3600) / 8 / 1000) });
+  $("#buffer-dir-row").hidden = form.bufferStorage.value !== "disk";
   $("#ptt-row").hidden = form.micMode.value !== "ptt";
   $("#mic-device-row").hidden = form.micMode.value === "off";
 }
@@ -522,11 +533,13 @@ function updateDerived() {
 form.addEventListener("input", () => { updateDerived(); updateDirty(); });
 form.addEventListener("change", updateDirty);
 
-$("#browse").addEventListener("click", async () => {
-  const dir = await invoke("pick_folder");
-  if (dir) form.outputDir.value = dir;
-  updateDirty();
-});
+for (const [button, field] of [["#browse", "outputDir"], ["#browse-buffer", "bufferDir"]]) {
+  $(button).addEventListener("click", async () => {
+    const dir = await invoke("pick_folder");
+    if (dir) form[field].value = dir;
+    updateDirty();
+  });
+}
 
 // Gyorsbillentyű-rögzítés: módosító + billentyű (vagy önálló F-billentyű)
 function startCapture(button, onDone) {

@@ -7,6 +7,9 @@ use std::path::PathBuf;
 pub struct Settings {
     pub output_dir: String,
     pub buffer_seconds: u32,
+    /// "memory" (RAM) vagy "disk" (darabok a `buffer_dir` mappában)
+    pub buffer_storage: String,
+    pub buffer_dir: String,
     /// "native" vagy "SZÉLESSÉGxMAGASSÁG"
     pub resolution: String,
     pub fps: u32,
@@ -44,11 +47,17 @@ fn default_output_dir() -> String {
     crate::platform::videos_dir().join("ClipCat").to_string_lossy().into_owned()
 }
 
+fn default_buffer_dir() -> String {
+    crate::platform::state_dir().join("buffer").to_string_lossy().into_owned()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             output_dir: default_output_dir(),
             buffer_seconds: 150,
+            buffer_storage: "memory".into(),
+            buffer_dir: default_buffer_dir(),
             resolution: "1920x1080".into(),
             fps: 60,
             bitrate_mbps: 40,
@@ -78,8 +87,15 @@ impl Settings {
     /// (a tartalma elvész). Az asztal rögzítése és a mikrofon azonnal, újraépítés nélkül változik.
     pub fn pipeline_fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}",
-            self.output_dir, self.buffer_seconds, self.resolution, self.fps, self.bitrate_mbps, self.codec
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.output_dir,
+            self.buffer_seconds,
+            self.buffer_storage,
+            self.buffer_dir,
+            self.resolution,
+            self.fps,
+            self.bitrate_mbps,
+            self.codec
         )
     }
 
@@ -89,6 +105,12 @@ impl Settings {
         }
         if !(10..=1200).contains(&self.buffer_seconds) {
             return Err(tf("validate.buffer", &[("min", &10), ("max", &1200)]));
+        }
+        if !["memory", "disk"].contains(&self.buffer_storage.as_str()) {
+            return Err(t("validate.bufferStorage"));
+        }
+        if self.buffer_storage == "disk" && self.buffer_dir.trim().is_empty() {
+            return Err(t("validate.bufferDir"));
         }
         if !(5..=150).contains(&self.bitrate_mbps) {
             return Err(tf("validate.bitrate", &[("min", &5), ("max", &150)]));

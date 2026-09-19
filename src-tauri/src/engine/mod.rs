@@ -2,7 +2,8 @@
 //!
 //! Csak a szükséges modulok töltődnek be (képernyő-/játékrögzítés, hang, hardveres kódoló, replay
 //! buffer), a böngésző, websocket és egyéb pluginok nem. A replay buffer a memóriában tartja a kódolt
-//! képkockákat; mentéskor az `obs-ffmpeg-mux` segédprogram írja ki őket fájlba.
+//! képkockákat; mentéskor az `obs-ffmpeg-mux` segédprogram írja ki őket fájlba. Lemezes módban a
+//! puffer darabokban a lemezre íródik (lásd `disk`).
 //!
 //! A platformfüggő rész (a libobs helye és betöltése, a források és kódolók azonosítói) a `sys`
 //! modulban van: Windowson a ClipCat saját motormappája, Linuxon a rendszerre telepített OBS.
@@ -10,6 +11,8 @@
 #[cfg_attr(windows, path = "windows.rs")]
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 mod sys;
+
+mod disk;
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -137,6 +140,7 @@ obs_api! {
     obs_encoder_release: fn(Ptr);
     obs_output_create: fn(*const c_char, *const c_char, Ptr, Ptr) -> Ptr;
     obs_output_release: fn(Ptr);
+    obs_output_update: fn(Ptr, Ptr);
     obs_output_set_video_encoder: fn(Ptr, Ptr);
     obs_output_set_audio_encoder: fn(Ptr, Ptr, usize);
     obs_output_start: fn(Ptr) -> bool;
@@ -169,6 +173,8 @@ pub enum Event {
     Recorded(String),
     /// A kézi felvétel hiba miatt leállt (hibakód)
     RecordingFailed(i64),
+    /// A lemezes puffer mentése nem sikerült
+    SaveFailed(String),
 }
 
 static API: OnceLock<Api> = OnceLock::new();
@@ -259,6 +265,11 @@ pub fn engine_available() -> bool {
     sys::locate().is_some()
 }
 
+/// A lemezes pufferhez kell az ffmpeg (Windowson a motor mellé csomagolva, Linuxon a rendszeré).
+pub fn disk_buffer_available() -> bool {
+    disk::ffmpeg_available()
+}
+
 fn cs(text: &str) -> CString {
     CString::new(text.replace('\0', "")).unwrap_or_default()
 }
@@ -281,6 +292,15 @@ unsafe extern "C" fn on_saved(_data: Ptr, _cd: *mut Calldata) {
     let output = CURRENT_OUTPUT.load(Ordering::SeqCst);
     let path = API.get().and_then(|api| last_replay(api, output));
     emit(Event::Saved(path));
+}
+
+/// Lemezes puffer: a muxer új darabba kezdett.
+unsafe extern "C" fn on_segment(_data: Ptr, cd: *mut Calldata) {
+    let Some(api) = API.get() else { return };
+    let mut path: *const c_char = std::ptr::null();
+    if (api.calldata_get_string)(cd, c"next_file".as_ptr(), &mut path) && !path.is_null() {
+        disk::segment_started(PathBuf::from(CStr::from_ptr(path).to_string_lossy().into_owned()));
+    }
 }
 
 unsafe fn stop_code(api: &Api, cd: *mut Calldata) -> i64 {
@@ -403,6 +423,8 @@ impl Drop for Data<'_> {
 pub struct Config {
     pub output_dir: String,
     pub buffer_seconds: u32,
+    /// Lemezes puffer mappája; None: memóriás replay buffer
+    pub buffer_dir: Option<String>,
     pub base: (u32, u32),
     pub output: (u32, u32),
     pub fps: u32,
@@ -610,23 +632,21 @@ impl Engine {
             }
             (api.obs_encoder_set_audio)(self.audio_encoder, (api.obs_get_audio)());
 
-            // A memórialimit bőven a várható méret fölött, hogy mindig az időkorlát döntsön
-            let max_size_mb = (c.buffer_seconds as i64 * (c.bitrate_kbps as i64 + 192) / 8 / 1000 * 3 / 2 + 64).clamp(256, 16384);
-            let replay_settings = Data::new(api)
-                .str("directory", &forward(Path::new(&c.output_dir)))
-                .str("format", "Replay %CCYY-%MM-%DD %hh-%mm-%ss")
-                .str("extension", "mp4")
-                .bool("allow_spaces", true)
-                .int("max_time_sec", c.buffer_seconds as i64)
-                .int("max_size_mb", max_size_mb);
-            self.output = (api.obs_output_create)(c"replay_buffer".as_ptr(), c"clipcat_replay".as_ptr(), replay_settings.ptr, null_mut());
+            self.output = match &c.buffer_dir {
+                Some(dir) => create_disk_output(api, Path::new(dir)),
+                None => create_memory_output(api, &c),
+            };
             if self.output.is_null() {
                 return Err(t("engine.replayCreate"));
             }
             (api.obs_output_set_video_encoder)(self.output, self.video_encoder);
             (api.obs_output_set_audio_encoder)(self.output, self.audio_encoder, 0);
             let signals = (api.obs_output_get_signal_handler)(self.output);
-            (api.signal_handler_connect)(signals, c"saved".as_ptr(), on_saved, null_mut());
+            if c.buffer_dir.is_some() {
+                (api.signal_handler_connect)(signals, c"file_changed".as_ptr(), on_segment, null_mut());
+            } else {
+                (api.signal_handler_connect)(signals, c"saved".as_ptr(), on_saved, null_mut());
+            }
             (api.signal_handler_connect)(signals, c"stop".as_ptr(), on_stop, null_mut());
             CURRENT_OUTPUT.store(self.output, Ordering::SeqCst);
         }
@@ -634,8 +654,13 @@ impl Engine {
             self.start_replay()?;
         }
         logfile::write(&format!(
-            "Rögzítés: {}x{} @ {} FPS, {} kbps, {} s puffer",
-            c.output.0, c.output.1, c.fps, c.bitrate_kbps, c.buffer_seconds
+            "Rögzítés: {}x{} @ {} FPS, {} kbps, {} s puffer ({})",
+            c.output.0,
+            c.output.1,
+            c.fps,
+            c.bitrate_kbps,
+            c.buffer_seconds,
+            c.buffer_dir.as_deref().map_or("memória".to_string(), |d| format!("lemez: {d}"))
         ));
         Ok(())
     }
@@ -644,6 +669,12 @@ impl Engine {
         let api = self.api;
         if self.output.is_null() {
             return Err(t("engine.replayNotCreated"));
+        }
+        if let Some(dir) = &self.config.buffer_dir {
+            // Minden indítás új, üres darabsorral kezd
+            let first = disk::begin(Path::new(dir), self.config.buffer_seconds)?;
+            let settings = Data::new(api).str("path", &forward(&first));
+            unsafe { (api.obs_output_update)(self.output, settings.ptr) };
         }
         unsafe {
             // Közvetlenül egy leállítás után a libobs még zárhatja az előző adatfolyamot
@@ -654,13 +685,20 @@ impl Engine {
                 }
                 std::thread::sleep(Duration::from_millis(40));
             }
-            Err(tf("engine.replayStart", &[("detail", &last_error(api, self.output))]).trim().to_string())
+            let detail = last_error(api, self.output);
+            if self.config.buffer_dir.is_some() {
+                disk::end();
+            }
+            Err(tf("engine.replayStart", &[("detail", &detail)]).trim().to_string())
         }
     }
 
     fn stop_replay(&mut self) {
         if !self.output.is_null() {
             unsafe { stop_output(self.api, self.output, Duration::from_secs(5)) };
+        }
+        if self.config.buffer_dir.is_some() {
+            disk::end();
         }
         self.buffer_since = 0;
     }
@@ -684,6 +722,12 @@ impl Engine {
     /// A kódolók futva maradnak, így egy közben zajló kézi felvétel nem szakad meg.
     pub fn clear_replay(&mut self) -> Result<(), String> {
         if !self.replay_active() {
+            return Ok(());
+        }
+        // Lemezen elég a lezárt darabokat törölni, a kimenet futhat tovább
+        if self.config.buffer_dir.is_some() {
+            disk::clear();
+            self.buffer_since = now_ms();
             return Ok(());
         }
         self.stop_replay();
@@ -775,6 +819,9 @@ impl Engine {
         unsafe {
             if !self.output.is_null() {
                 stop_output(api, self.output, Duration::from_secs(5));
+                if self.config.buffer_dir.is_some() {
+                    disk::end();
+                }
                 self.buffer_since = 0;
                 CURRENT_OUTPUT.store(null_mut(), Ordering::SeqCst);
                 (api.obs_output_release)(self.output);
@@ -866,19 +913,36 @@ impl Engine {
         !self.output.is_null() && unsafe { (self.api.obs_output_active)(self.output) }
     }
 
+    /// A mentés háttérben készül el; az eredmény `Saved` (vagy `SaveFailed`) eseményként jön.
     pub fn save(&self) -> Result<(), String> {
         if !self.replay_active() {
             return Err(t("engine.replayNotRunning"));
         }
+        let known = if self.config.buffer_dir.is_some() { Some(disk::begin_save()?) } else { None };
+        let proc_name = if known.is_some() { c"split_file" } else { c"save" };
         let mut cd = Calldata::new();
-        unsafe {
+        let ok = unsafe {
             let ph = (self.api.obs_output_get_proc_handler)(self.output);
-            let ok = (self.api.proc_handler_call)(ph, c"save".as_ptr(), &mut cd);
+            let ok = (self.api.proc_handler_call)(ph, proc_name.as_ptr(), &mut cd);
             if !cd.stack.is_null() {
                 (self.api.bfree)(cd.stack as Ptr);
             }
-            if ok { Ok(()) } else { Err(t("engine.saveStart")) }
+            ok
+        };
+        let Some(known) = known else {
+            return if ok { Ok(()) } else { Err(t("engine.saveStart")) };
+        };
+        if !ok {
+            disk::end_save();
+            return Err(t("engine.saveStart"));
         }
+        // A lezárásra várás és az összefűzés másodpercekig tart: nem tartja a motor zárát
+        let (seconds, output_dir) = (self.config.buffer_seconds, PathBuf::from(&self.config.output_dir));
+        std::thread::spawn(move || match disk::finish_save(known, seconds, &output_dir) {
+            Ok(path) => emit(Event::Saved(Some(path.to_string_lossy().into_owned()))),
+            Err(e) => emit(Event::SaveFailed(e)),
+        });
+        Ok(())
     }
 
     pub fn shutdown(mut self) {
@@ -905,6 +969,34 @@ impl Engine {
         }
         logfile::write("libobs leállítva");
     }
+}
+
+/// Memóriás replay buffer; mentéskor a libobs írja ki a fájlt a mentési mappába.
+unsafe fn create_memory_output(api: &Api, c: &Config) -> Ptr {
+    // A memórialimit bőven a várható méret fölött, hogy mindig az időkorlát döntsön
+    let max_size_mb = (c.buffer_seconds as i64 * (c.bitrate_kbps as i64 + 192) / 8 / 1000 * 3 / 2 + 64).clamp(256, 16384);
+    let settings = Data::new(api)
+        .str("directory", &forward(Path::new(&c.output_dir)))
+        .str("format", "Replay %CCYY-%MM-%DD %hh-%mm-%ss")
+        .str("extension", "mp4")
+        .bool("allow_spaces", true)
+        .int("max_time_sec", c.buffer_seconds as i64)
+        .int("max_size_mb", max_size_mb);
+    (api.obs_output_create)(c"replay_buffer".as_ptr(), c"clipcat_replay".as_ptr(), settings.ptr, null_mut())
+}
+
+/// Lemezes puffer: folyamatos felvétel rövid darabokra bontva; az első darab útvonalát indításkor kapja.
+unsafe fn create_disk_output(api: &Api, dir: &Path) -> Ptr {
+    let settings = Data::new(api)
+        .str("directory", &forward(dir))
+        .str("format", &format!("{}%CCYY-%MM-%DD %hh-%mm-%ss", disk::PREFIX))
+        .str("extension", disk::EXTENSION)
+        .bool("allow_spaces", true)
+        .bool("split_file", true)
+        .int("max_time_sec", disk::SEGMENT_SECONDS)
+        .int("max_size_mb", 0)
+        .str("muxer_settings", "");
+    (api.obs_output_create)(c"ffmpeg_muxer".as_ptr(), c"clipcat_replay".as_ptr(), settings.ptr, null_mut())
 }
 
 fn set_replay_wanted(wanted: bool) {

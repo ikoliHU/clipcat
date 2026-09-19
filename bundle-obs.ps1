@@ -6,12 +6,15 @@
     Letölti az OBS Studio Windows zipjét a GitHubról, és csak a rögzítéshez szükséges fájlokat
     (~56 MB) csomagolja ki az "obs" mappába (alapból a szkript mellé): a libobs-t, az FFmpeg DLL-eket,
     a játék-/monitorrögzítés, hang, NVENC, x264 és replay buffer modulokat, valamint a shadereket.
+    A lemezes pufferhez mellé teszi a Gyan-féle statikus ffmpeg.exe-t (obs\ffmpeg), SHA256-ellenőrzéssel.
     Az OBS-t nem kell telepíteni. A Windows-build (cargo tauri build) beforeBuildCommandként futtatja;
     ha a célmappában már ez a verzió van, nem csinál semmit.
 .PARAMETER Version
     Az OBS verziója, amelyből a motor készül.
 .PARAMETER Zip
     Már letöltött zip használata letöltés helyett.
+.PARAMETER FfmpegZip
+    Már letöltött ffmpeg essentials zip használata letöltés helyett.
 .PARAMETER Dest
     A célmappa; a telepítő a src-tauri\obs mappát csomagolja.
 .PARAMETER Force
@@ -20,6 +23,7 @@
 param(
     [string]$Version = '32.2.2',
     [string]$Zip,
+    [string]$FfmpegZip,
     [string]$Dest = (Join-Path $PSScriptRoot 'src-tauri\obs'),
     [switch]$Force
 )
@@ -27,11 +31,16 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+# A lemezes puffer vágója; új verziónál a hash a GitHub release asset "digest" mezőjéből
+$ffmpegVersion = '9.0.1'
+$ffmpegSha256 = 'fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9'
+
 $dest = $Dest
 $versionFile = Join-Path $dest 'VERSION.txt'
-if (-not $Force -and (Test-Path (Join-Path $dest 'bin\64bit\obs.dll')) -and (Test-Path $versionFile) -and
-    ((Get-Content $versionFile -Raw).Trim() -eq $Version)) {
-    Write-Host "Rögzítőmotor naprakész (OBS $Version): $dest"
+$versionTag = "$Version+ffmpeg-$ffmpegVersion"
+if (-not $Force -and (Test-Path (Join-Path $dest 'bin\64bit\obs.dll')) -and (Test-Path (Join-Path $dest 'ffmpeg\ffmpeg.exe')) -and
+    (Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $versionTag)) {
+    Write-Host "Rögzítőmotor naprakész (OBS $Version, FFmpeg $ffmpegVersion): $dest"
     exit 0
 }
 $modules = 'win-capture', 'win-wasapi', 'obs-ffmpeg', 'obs-nvenc', 'obs-x264'
@@ -81,15 +90,48 @@ try {
     $archive.Dispose()
 }
 
-foreach ($required in @('bin\64bit\obs.dll', 'bin\64bit\obs-ffmpeg-mux.exe') + ($modules | ForEach-Object { "obs-plugins\64bit\$_.dll" })) {
+$ffmpegTemp = $null
+if (-not $FfmpegZip) {
+    $FfmpegZip = Join-Path $env:TEMP "ffmpeg-$ffmpegVersion-essentials_build.zip"
+    $ffmpegTemp = $FfmpegZip
+    $url = "https://github.com/GyanD/codexffmpeg/releases/download/$ffmpegVersion/ffmpeg-$ffmpegVersion-essentials_build.zip"
+    Write-Host "FFmpeg $ffmpegVersion letöltése (~110 MB)..."
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $url -OutFile $FfmpegZip -UseBasicParsing
+}
+$hash = (Get-FileHash $FfmpegZip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($hash -ne $ffmpegSha256) { throw "Az ffmpeg zip SHA256-a nem egyezik: $hash" }
+
+# Csak a statikus ffmpeg.exe és a licence kell (GPL, ezért a licenc is a csomagba kerül)
+$archive = [System.IO.Compression.ZipFile]::OpenRead($FfmpegZip)
+try {
+    foreach ($entry in $archive.Entries) {
+        $name = switch -Regex ($entry.FullName) {
+            '^[^/]+/bin/ffmpeg\.exe$' { 'ffmpeg.exe' }
+            '^[^/]+/LICENSE$' { 'LICENSE.txt' }
+            default { $null }
+        }
+        if (-not $name) { continue }
+        $target = Join-Path $staging "ffmpeg\$name"
+        New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        $count++
+    }
+} finally {
+    $archive.Dispose()
+}
+
+foreach ($required in @('bin\64bit\obs.dll', 'bin\64bit\obs-ffmpeg-mux.exe', 'ffmpeg\ffmpeg.exe') + ($modules | ForEach-Object { "obs-plugins\64bit\$_.dll" })) {
     if (-not (Test-Path (Join-Path $staging $required))) { throw "Hiányzik a zipből: $required" }
 }
-Set-Content -Path (Join-Path $staging 'VERSION.txt') -Value $Version -Encoding ASCII
+Set-Content -Path (Join-Path $staging 'VERSION.txt') -Value $versionTag -Encoding ASCII
 
 # Csere csak a sikeres kicsomagolás után, hogy egy megszakadt letöltés ne tegye tönkre a meglévőt
 Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
 Move-Item $staging $dest
-if ($temp) { Remove-Item $temp -Force -ErrorAction SilentlyContinue }
+foreach ($file in $temp, $ffmpegTemp) {
+    if ($file) { Remove-Item $file -Force -ErrorAction SilentlyContinue }
+}
 
 $size = (Get-ChildItem $dest -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ("Rögzítőmotor kész: {0} fájl, {1:N1} MB -> {2}" -f $count, $size, $dest) -ForegroundColor Green
