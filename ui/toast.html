@@ -1,69 +1,11 @@
 <!doctype html>
-<html lang="hu">
+<html lang="hu" class="toast">
 <head>
   <meta charset="utf-8">
   <title>ClipCat</title>
-  <style>
-    html, body {
-      margin: 0; height: 100%; overflow: hidden;
-      background: transparent;
-      font: 14px/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-      color: #e8e9ec;
-      user-select: none;
-    }
-    .toast {
-      position: absolute; inset: 6px;
-      display: flex; align-items: center; gap: 14px;
-      padding: 0 18px 0 16px;
-      border-radius: 12px;
-      background: rgba(24, 25, 29, .94);
-      border: 1px solid rgba(255, 255, 255, .08);
-      opacity: 0; transform: translateX(24px);
-    }
-    .toast.show { animation: life 3.7s cubic-bezier(.22, 1, .36, 1) forwards; }
-    /* Ugyanazon az úton távozik, amelyen érkezett */
-    @keyframes life {
-      0% { opacity: 0; transform: translateX(24px); }
-      8%, 85% { opacity: 1; transform: translateX(0); }
-      100% { opacity: 0; transform: translateX(24px); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      @keyframes life {
-        0%, 100% { opacity: 0; transform: none; }
-        6%, 88% { opacity: 1; transform: none; }
-      }
-    }
-    .icon {
-      width: 38px; height: 38px; border-radius: 50%; flex: none;
-      display: grid; place-items: center;
-      background: rgba(74, 222, 128, .16); color: #4ade80;
-    }
-    .error .icon { background: rgba(239, 68, 68, .16); color: #f87171; }
-    .icon svg { width: 22px; height: 22px; }
-    .text { min-width: 0; }
-    .title { font-weight: 600; font-size: 15px; }
-    .detail { color: #a1a5ae; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  </style>
 </head>
 <body>
-  <div class="toast" id="toast">
-    <div class="icon" id="icon"></div>
-    <div class="text"><div class="title" id="title"></div><div class="detail" id="detail"></div></div>
-  </div>
-  <script>
-    const ICONS = {
-      ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
-      error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 7v6M12 17h.01"/></svg>',
-    };
-    const toast = document.getElementById("toast");
-    window.__TAURI__.event.listen("toast", ({ payload }) => {
-      toast.className = "toast " + payload.kind;
-      document.getElementById("icon").innerHTML = ICONS[payload.kind] || ICONS.ok;
-      document.getElementById("title").textContent = payload.title;
-      document.getElementById("detail").textContent = payload.detail;
-      void toast.offsetWidth; // az animáció újraindítása egymást követő értesítéseknél
-      toast.classList.add("show");
-    });
-  </script>
+  <div id="root"></div>
+  <script type="module" src="/src/toast.tsx"></script>
 </body>
 </html>

@@ -19,3 +19,14 @@ A csomagokat a frissítő minisign-kulccsal ellenőrzi. A publikus kulcs a `taur
 van, a titkos kulcs és jelszava a repó `TAURI_SIGNING_PRIVATE_KEY` és
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secretjében. Ha a titkos kulcs elveszik, a már telepített
 példányok nem tudnak többé frissíteni.
+
+## Fejlesztés
+
+A felület React + Tailwind CSS (Vite), forrása a `ui/` mappában; a fordítások a
+`ui/locales/`-ban vannak, ezeket a Rust oldal is beolvassa.
+
+```sh
+npm install
+npx tauri dev    # Vite dev szerver + az alkalmazás
+npx tauri build  # telepítőcsomag
+```

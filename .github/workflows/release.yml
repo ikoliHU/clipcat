@@ -100,11 +100,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
+      - run: npm ci
       - name: Build NSIS installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx tauri build
       - name: Write updater platform entry
         shell: pwsh
         env:
@@ -158,11 +160,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
+      - run: npm ci
       - name: Build AppImage, deb, and rpm
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx tauri build
       - name: Sign packages and write updater platform entry
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -187,7 +191,7 @@ jobs:
           # package the bundler left unsigned so every install kind can update.
           for file in "$appimage" "$deb" "$rpm"; do
             if [ ! -f "$file.sig" ]; then
-              npx --yes @tauri-apps/cli@2 signer sign "$file"
+              npx tauri signer sign "$file"
             fi
           done
           entry() {

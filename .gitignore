@@ -7,3 +7,7 @@ src-tauri/obs/
 
 # Régi, kézzel másolt telepítők
 dist/
+
+# Frontend
+node_modules/
+ui-dist/

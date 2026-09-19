@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+@custom-variant reduce-transparency (@media (prefers-reduced-transparency: reduce));
+
+@theme {
+  /* Felületek: a sötétebb anyag szerkezetet ad (oldalsáv), a világosabb interakciót (vezérlők) */
+  --color-canvas: #121214;
+  --color-sidebar: #18181b;
+  --color-panel: #1f1f23;
+  --color-panel-2: #2a2a2f;
+  --color-panel-3: #333339;
+  --color-line: rgb(255 255 255 / 0.07);
+  --color-line-strong: rgb(255 255 255 / 0.12);
+  --color-fg: #f2f2f4;
+  --color-muted: #9d9da6;
+  --color-faint: #6e6e78;
+  --color-accent: #34d399;
+  --color-accent-hover: #5ee0b0;
+  --color-accent-ink: #062a1c;
+  --color-accent-soft: rgb(52 211 153 / 0.16);
+  --color-focus: rgb(52 211 153 / 0.55);
+  --color-danger: #ff453a;
+  --color-danger-hover: #ff5b52;
+  --color-danger-soft: #ff8a80;
+  --color-warn-soft: #fcd34d;
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+
+  /* Kritikusan csillapított rugó közelítése: gyors indulás, túllövés nélküli beállás */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-view-in: view-in 250ms var(--ease-spring);
+  --animate-bar-in: bar-in 300ms var(--ease-spring);
+  --animate-toast: toast 3.7s var(--ease-spring) forwards;
+
+  @keyframes view-in {
+    from { opacity: 0; transform: translateY(6px); }
+  }
+  @keyframes bar-in {
+    from { opacity: 0; transform: translateY(12px); }
+  }
+  /* Az értesítés ugyanazon az úton távozik, amelyen érkezett */
+  @keyframes toast {
+    0% { opacity: 0; transform: translateX(24px); }
+    8%, 85% { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(24px); }
+  }
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    background: var(--color-canvas);
+    color: var(--color-fg);
+    font: 14px/1.45 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    color-scheme: dark;
+  }
+  /* Az értesítés ablaka átlátszó, csak a kártya látszik */
+  html.toast body {
+    background: transparent;
+    overflow: hidden;
+  }
+  button {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:disabled {
+    cursor: default;
+  }
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Görgetési él: kemény elválasztó helyett finom kifutás a fejléc alatt */
+@utility scroll-area {
+  overflow-y: auto;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+
+  &::-webkit-scrollbar { width: 12px; }
+  &::-webkit-scrollbar-thumb {
+    background: rgb(255 255 255 / 0.14);
+    border-radius: 12px;
+    border: 4px solid transparent;
+    background-clip: padding-box;
+  }
+  &::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.24); }
+}
+
+/* ---------- Akadálymentesség ---------- */
+
+@keyframes fade {
+  from { opacity: 0; }
+}
+@keyframes toast-fade {
+  0%, 100% { opacity: 0; }
+  6%, 88% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 1ms !important;
+    animation: none !important;
+  }
+  .animate-view-in, .animate-bar-in {
+    animation: fade 150ms ease !important;
+  }
+  .animate-toast {
+    animation: toast-fade 3.7s ease forwards !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --color-line: rgb(255 255 255 / 0.28);
+    --color-muted: #c4c4cc;
+  }
+}
