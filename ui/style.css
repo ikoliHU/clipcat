@@ -253,7 +253,9 @@ button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-c
 /* ---------- Beállítások ---------- */
 
 /* Csoportosított lista: a szakaszcím a csoport fölött, beljebb húzott elválasztók */
-.settings { display: flex; flex-direction: column; gap: 28px; max-width: 760px; }
+/* Olvasható szélességű, középre igazított oszlop; a cím ugyanahhoz az élhez igazodik */
+.settings { display: flex; flex-direction: column; gap: 28px; width: 100%; max-width: 800px; margin: 0 auto; }
+#view-settings .view-head { width: 100%; max-width: calc(800px + 64px); margin: 0 auto; }
 .card h2 {
   margin: 0 0 8px; padding: 0 16px;
   font-size: 12.5px; font-weight: 600; color: var(--muted); letter-spacing: .01em;
