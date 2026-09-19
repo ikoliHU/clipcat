@@ -1,6 +1,6 @@
 [package]
 name = "clipcat"
-version = "0.3.0"
+version = "0.3.1"
 description = "ShadowPlay-szerű visszajátszás-rögzítő beágyazott libobs-szal"
 edition = "2021"
 
