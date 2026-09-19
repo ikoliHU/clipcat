@@ -21,6 +21,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    webview::PageLoadEvent,
     AppHandle, Emitter, Manager, WindowEvent, Wry,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -972,6 +973,14 @@ fn main() {
     // Az állapotot a Builderen kell regisztrálni: a konfigurációban megadott ablakok a setup előtt
     // jönnek létre, és a felület JavaScriptje gyors betöltésnél már a setup előtt parancsokat hív.
     tauri::Builder::default()
+        // A webview alapértelmezett helyi menüje (Vissza, Frissítés, Vizsgálat…) sehol ne jelenjen meg
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let _ = webview.eval(
+                    "document.addEventListener('contextmenu', e => e.preventDefault());",
+                );
+            }
+        })
         .manage(AppState {
             settings: Mutex::new(settings.clone()),
             status: Mutex::new(Status::default()),
@@ -1028,6 +1037,11 @@ fn main() {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = main_handle.hide();
+                        // A rejtett ablakban ne szóljon tovább a lejátszó: a felület a
+                        // "main-hidden" eseményre bezárja; a szüneteltetés csak védőháló
+                        let _ = main_handle
+                            .eval("document.querySelectorAll('video').forEach(v => v.pause());");
+                        let _ = main_handle.emit("main-hidden", ());
                     }
                 });
             }
