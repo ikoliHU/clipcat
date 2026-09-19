@@ -60,7 +60,7 @@ impl Default for Settings {
             buffer_dir: default_buffer_dir(),
             resolution: "1920x1080".into(),
             fps: 60,
-            bitrate_mbps: 40,
+            bitrate_mbps: 30,
             codec: "h264".into(),
             capture_desktop: true,
             mic_mode: "always".into(),
@@ -112,11 +112,12 @@ impl Settings {
         if self.buffer_storage == "disk" && self.buffer_dir.trim().is_empty() {
             return Err(t("validate.bufferDir"));
         }
-        if !(5..=150).contains(&self.bitrate_mbps) {
-            return Err(tf("validate.bitrate", &[("min", &5), ("max", &150)]));
-        }
         if ![30, 60, 120, 144].contains(&self.fps) {
             return Err(t("validate.fps"));
+        }
+        let max_bitrate = max_bitrate_mbps(self.fps);
+        if !(MIN_BITRATE_MBPS..=max_bitrate).contains(&self.bitrate_mbps) {
+            return Err(tf("validate.bitrate", &[("min", &MIN_BITRATE_MBPS), ("max", &max_bitrate), ("fps", &self.fps)]));
         }
         if !["h264", "hevc"].contains(&self.codec.as_str()) {
             return Err(t("validate.codec"));
@@ -137,6 +138,19 @@ impl Settings {
     }
 }
 
+pub const MIN_BITRATE_MBPS: u32 = 5;
+
+/// A képkockasebességhez tartozó legnagyobb bitráta; alacsony FPS-nél ennél többől már nem
+/// lesz szebb a kép, csak nagyobb a fájl. A felület (ui/app.js) ugyanezt a táblát használja.
+pub fn max_bitrate_mbps(fps: u32) -> u32 {
+    match fps {
+        0..=30 => 80,
+        31..=60 => 100,
+        61..=120 => 130,
+        _ => 150,
+    }
+}
+
 /// Bármely billentyű vagy egérgomb jó, kivéve a bal és jobb egérgombot.
 pub fn is_ptt_key_supported(vk: u32) -> bool {
     (0x03..=0xFE).contains(&vk)
@@ -153,10 +167,13 @@ fn settings_path() -> PathBuf {
 }
 
 pub fn load() -> Settings {
-    std::fs::read_to_string(settings_path())
+    let mut settings: Settings = std::fs::read_to_string(settings_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // A régebbi, FPS-től független felső határral mentett bitrátát az új határra vágja
+    settings.bitrate_mbps = settings.bitrate_mbps.min(max_bitrate_mbps(settings.fps));
+    settings
 }
 
 pub fn save(settings: &Settings) -> std::io::Result<()> {

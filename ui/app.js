@@ -473,10 +473,46 @@ async function loadStorageOptions() {
   option.textContent = t(available ? "settings.storage.disk" : "settings.storage.diskMissing");
 }
 
+// Ajánlott bitráta 1080p H.264-hez; a gyors NVENC preset és a kikapcsolt B-képkockák miatt
+// magasabb a ShadowPlay értékeinél. A felső határ a settings.rs max_bitrate_mbps táblája.
+const BITRATE_1080P = { 30: 20, 60: 30, 120: 45, 144: 50 };
+const MAX_BITRATE = { 30: 80, 60: 100, 120: 130, 144: 150 };
+
+function outputPixels(resolution) {
+  const [w, h] = resolution === "native"
+    ? [screen.width * devicePixelRatio, screen.height * devicePixelRatio]
+    : resolution.split("x").map(Number);
+  return w * h;
+}
+
+function recommendedBitrate(fps, resolution, codec) {
+  const range = form.bitrateMbps;
+  const pixelFactor = outputPixels(resolution) / (1920 * 1080);
+  const value = BITRATE_1080P[fps] * pixelFactor * (codec === "hevc" ? 0.7 : 1);
+  return Math.min(MAX_BITRATE[fps], Math.max(Number(range.min), Math.round(value / 5) * 5));
+}
+
+// A csúszka felső határa az FPS-től függ; előbb kell beállítani, mint az értéket, különben levágódik
+function updateBitrateMax(fps) {
+  form.bitrateMbps.max = MAX_BITRATE[fps];
+}
+
+// FPS-, felbontás- vagy kodekváltáskor az ajánlott bitrátára ugrik, amit utána szabadon át lehet írni
+for (const name of ["fps", "resolution", "codec"]) {
+  form[name].addEventListener("change", () => {
+    const fps = Number(form.fps.value);
+    updateBitrateMax(fps);
+    form.bitrateMbps.value = recommendedBitrate(fps, form.resolution.value, form.codec.value);
+    updateDerived();
+    updateDirty();
+  });
+}
+
 async function fillForm() {
   if (!settings) return;
   await Promise.all([loadMics(settings.micDevice), loadStorageOptions()]);
   draft = structuredClone(settings);
+  updateBitrateMax(draft.fps);
   for (const el of form.elements) {
     if (!el.name || !(el.name in draft)) continue;
     if (el.type === "checkbox") el.checked = draft[el.name];
@@ -514,6 +550,9 @@ function updateDirty() {
   $(".save-bar").hidden = !dirty && !savingSettings && !msg.textContent;
 }
 
+const AUDIO_MBPS = 0.192;
+const DISK_DAILY_HOURS = 4;
+
 function updateDerived() {
   const buffer = Number(form.bufferSeconds.value);
   const bitrate = Number(form.bitrateMbps.value);
@@ -522,9 +561,23 @@ function updateDerived() {
   }
   $("#buffer-value").textContent = formatDuration(buffer);
   $("#bitrate-value").textContent = `${bitrate} Mbps`;
+  const fps = Number(form.fps.value);
+  $("#bitrate-recommended").textContent = t("settings.bitrate.recommended", {
+    value: recommendedBitrate(fps, form.resolution.value, form.codec.value),
+    max: MAX_BITRATE[fps],
+  });
   $("#size-hint").textContent = t("settings.bitrate.sizeHint", { duration: formatDuration(buffer), size: Math.round((buffer * bitrate) / 8) });
   $("#storage-hint").textContent = t("settings.storage.hint", { size: Math.round((buffer * bitrate) / 8) });
-  $("#buffer-dir-hint").textContent = t("settings.bufferDir.hint", { size: Math.round((bitrate * 3600) / 8 / 1000) });
+  // Lemezes puffernél a teljes videó- és hangfolyam az SSD-re kerül; becslés napi DISK_DAILY_HOURS óra
+  // játékra, egy átlagos 1 TB-os SSD 600 TBW-os tanúsított írási keretéhez viszonyítva
+  const gbPerHour = ((bitrate + AUDIO_MBPS) * 3600) / 8 / 1000;
+  const tbPerYear = (gbPerHour * DISK_DAILY_HOURS * 365) / 1000;
+  $("#buffer-dir-hint").textContent = t("settings.bufferDir.hint", {
+    hour: Math.round(gbPerHour),
+    daily: DISK_DAILY_HOURS,
+    year: Math.round(tbPerYear),
+    percent: Math.max(1, Math.round((tbPerYear / 600) * 100)),
+  });
   $("#buffer-dir-row").hidden = form.bufferStorage.value !== "disk";
   $("#ptt-row").hidden = form.micMode.value !== "ptt";
   $("#mic-device-row").hidden = form.micMode.value === "off";

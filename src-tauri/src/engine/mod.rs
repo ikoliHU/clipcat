@@ -581,11 +581,11 @@ impl Engine {
                     .str("rate_control", "CBR")
                     .int("bitrate", c.bitrate_kbps as i64)
                     .int("keyint_sec", 2)
-                    // Ekkora bitrátán a lassabb preset, a pszichovizuális AQ és a B-képkockák alig
-                    // javítanak a képen, a folyamatos pufferelésnél viszont sokszorosára növelik
-                    // a kódoló terhelését
+                    // A p4 a minőség és a kódolóterhelés legjobb egyensúlya; ekkora bitrátán a
+                    // pszichovizuális AQ és a B-képkockák alig javítanak a képen, a folyamatos
+                    // pufferelésnél viszont sokszorosára növelik a kódoló terhelését
                     // Az OBS 31+ obs-nvenc kulcsai: a régi preset2/psycho_aq hatástalan
-                    .str("preset", "p2")
+                    .str("preset", "p4")
                     .str("tune", "hq")
                     .str("multipass", "disabled")
                     .str("profile", if c.hevc { "main" } else { "high" })

@@ -17,6 +17,7 @@
   --focus: rgba(52, 211, 153, .55);
   --danger: #ff453a;
   --danger-soft: #ff8a80;
+  --warn-soft: #fcd34d;
 
   --radius: 12px;
   --radius-sm: 8px;
@@ -280,6 +281,7 @@ button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-c
 .row .label { flex: 1; min-width: 0; }
 .row .label .hint { color: var(--muted); font-size: 12.5px; line-height: 1.35; margin-top: 1px; }
 .row .label .hint.error { color: var(--danger-soft); }
+.row .label .hint.warn { color: var(--warn-soft); }
 .row .label .hint:empty { display: none; }
 #update-hint { white-space: pre-line; }
 .row .control { display: flex; align-items: center; gap: 8px; }
