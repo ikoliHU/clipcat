@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": {
+      "script": "powershell -NoProfile -ExecutionPolicy Bypass -File bundle-obs.ps1",
+      "cwd": ".."
+    }
+  },
+  "bundle": {
+    "targets": ["nsis"],
+    "resources": {
+      "obs/": "obs/"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "./installer-hooks.nsh"
+      }
+    }
+  }
+}

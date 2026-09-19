@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <title>ClipCat</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><img src="logo.png" alt="">ClipCat</div>
+
+    <nav class="nav">
+      <span class="nav-indicator" aria-hidden="true"></span>
+      <button data-view="gallery" class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span data-i18n="nav.gallery"></span>
+      </button>
+      <button data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span data-i18n="nav.settings"></span>
+      </button>
+    </nav>
+
+    <div class="status-card">
+      <section class="panel-group" id="replay-group">
+        <div class="group-head">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="group-title" id="status-text" data-i18n="status.connecting"></span>
+          <label class="switch small" id="replay-switch" data-i18n-title="status.replayToggleTitle" hidden>
+            <input type="checkbox" id="replay-toggle"><span></span>
+          </label>
+        </div>
+        <div class="status-sub" id="status-sub"></div>
+        <div class="buffer-bar" id="buffer-bar" hidden><span></span></div>
+        <button class="btn primary" id="save-now"><span data-i18n="actions.saveNow"></span> <kbd id="save-kbd"></kbd></button>
+      </section>
+
+      <section class="panel-group">
+        <button class="btn record" id="record"><span class="rec-dot"></span><span id="record-label" data-i18n="actions.record"></span> <kbd id="record-kbd"></kbd></button>
+      </section>
+
+      <button class="link-btn" id="open-folder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span data-i18n="actions.openFolder"></span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <section class="view active" id="view-gallery">
+      <div class="view-head">
+        <h1 data-i18n="gallery.title"></h1>
+        <span class="count" id="clip-count"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="refresh" data-i18n="gallery.refresh"></button>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="scroll"><div class="grid" id="grid"></div><div class="empty" id="empty" hidden></div></div>
+    </section>
+
+    <section class="view" id="view-settings">
+      <div class="view-head"><h1 data-i18n="settings.title"></h1></div>
+      <div class="scroll">
+        <form class="settings" id="settings-form" autocomplete="off">
+          <div class="card">
+            <h2 data-i18n="settings.capture.title"></h2>
+            <div class="group">
+              <div class="row">
+                <div class="label"><span data-i18n="settings.outputDir.label"></span><div class="hint" data-i18n="settings.outputDir.hint"></div></div>
+                <div class="control"><input type="text" class="wide" name="outputDir"><button type="button" class="btn" id="browse" data-i18n="settings.browse"></button></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.buffer.label"></span><div class="hint" data-i18n="settings.buffer.hint"></div></div>
+                <div class="control"><input type="range" name="bufferSeconds" min="30" max="600" step="10"><span class="value" id="buffer-value"></span></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.resolution.label"></span></div>
+                <div class="control"><select name="resolution">
+                  <option value="native" data-i18n="settings.resolution.native"></option>
+                  <option value="2560x1440">1440p (2560×1440)</option>
+                  <option value="1920x1080">1080p (1920×1080)</option>
+                  <option value="1280x720">720p (1280×720)</option>
+                </select></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.fps.label"></span></div>
+                <div class="control"><select name="fps">
+                  <option value="30">30 FPS</option><option value="60">60 FPS</option>
+                  <option value="120">120 FPS</option><option value="144">144 FPS</option>
+                </select></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.bitrate.label"></span><div class="hint" id="size-hint"></div></div>
+                <div class="control"><input type="range" name="bitrateMbps" min="10" max="100" step="5"><span class="value" id="bitrate-value"></span></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.codec.label"></span></div>
+                <div class="control"><select name="codec">
+                  <option value="h264" data-i18n="settings.codec.h264"></option>
+                  <option value="hevc" data-i18n="settings.codec.hevc"></option>
+                </select></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.captureDesktop.label"></span><div class="hint" data-i18n="settings.captureDesktop.hint"></div></div>
+                <div class="control"><label class="switch"><input type="checkbox" name="captureDesktop"><span></span></label></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2 data-i18n="settings.audio.title"></h2>
+            <div class="group">
+              <div class="row">
+                <div class="label"><span data-i18n="settings.mic.label"></span></div>
+                <div class="control"><select name="micMode">
+                  <option value="off" data-i18n="settings.mic.off"></option>
+                  <option value="ptt" data-i18n="settings.mic.ptt"></option>
+                  <option value="always" data-i18n="settings.mic.always"></option>
+                </select></div>
+              </div>
+              <div class="row" id="mic-device-row">
+                <div class="label"><span data-i18n="settings.micDevice.label"></span></div>
+                <div class="control"><select name="micDevice"></select></div>
+              </div>
+              <div class="row" id="ptt-row">
+                <div class="label"><span data-i18n="settings.pttKey.label"></span><div class="hint" data-i18n="settings.pttKey.hint"></div></div>
+                <div class="control"><button type="button" class="keycap" id="ptt-key"></button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2 data-i18n="settings.hotkeys.title"></h2>
+            <div class="group">
+              <div class="row">
+                <div class="label"><span data-i18n="settings.hotkeySave.label"></span></div>
+                <div class="control"><button type="button" class="keycap" data-hotkey="hotkeySave"></button></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.hotkeyRecord.label"></span><div class="hint" data-i18n="settings.hotkeyRecord.hint"></div></div>
+                <div class="control"><button type="button" class="keycap" data-hotkey="hotkeyRecord"></button></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.hotkeyOpenFolder.label"></span><div class="hint" data-i18n="settings.hotkeyOpenFolder.hint"></div></div>
+                <div class="control"><button type="button" class="keycap" data-hotkey="hotkeyOpenFolder"></button></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.hotkeyGallery.label"></span></div>
+                <div class="control"><button type="button" class="keycap" data-hotkey="hotkeyGallery"></button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2 data-i18n="settings.system.title"></h2>
+            <div class="group">
+              <div class="row">
+                <div class="label"><span data-i18n="settings.showNotification.label"></span><div class="hint" data-i18n="settings.showNotification.hint"></div></div>
+                <div class="control"><label class="switch"><input type="checkbox" name="showNotification"><span></span></label></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.notificationSound.label"></span></div>
+                <div class="control"><label class="switch"><input type="checkbox" name="notificationSound"><span></span></label></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.autostart.label"></span></div>
+                <div class="control"><label class="switch"><input type="checkbox" name="autostart"><span></span></label></div>
+              </div>
+              <div class="row">
+                <div class="label"><span data-i18n="settings.keepRunning.label"></span><div class="hint" data-i18n="settings.keepRunning.hint"></div></div>
+                <div class="control"><label class="switch"><input type="checkbox" name="keepObsRunning"><span></span></label></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="save-bar" hidden>
+            <span class="note" data-i18n="settings.saveNote"></span>
+            <span class="save-msg" id="save-msg"></span>
+            <button type="submit" class="btn primary" id="save-settings" data-i18n="settings.save"></button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal" id="modal">
+  <div class="player">
+    <video id="player" controls></video>
+    <div class="player-bar">
+      <div class="info"><div class="title" id="player-title"></div><div class="sub" id="player-sub"></div></div>
+      <button class="btn" id="player-reveal" data-i18n="player.reveal"></button>
+      <button class="btn" id="player-open" data-i18n="player.openExternal"></button>
+      <button class="btn danger" id="player-delete" data-i18n="player.delete"></button>
+      <button class="btn" id="player-close" data-i18n="player.close"></button>
+    </div>
+  </div>
+</div>
+
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

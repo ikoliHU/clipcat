@@ -1,0 +1,9 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# A bundle-obs.ps1 állítja elő az OBS portable zipjéből
+src-tauri/obs/
+
+# Régi, kézzel másolt telepítők
+dist/

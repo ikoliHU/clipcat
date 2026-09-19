@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "A főablak és az értesítés alapjogosultságai",
+  "windows": ["main", "toast"],
+  "permissions": ["core:default"]
+}
