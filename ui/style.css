@@ -122,6 +122,10 @@ button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-c
 .link-btn:hover { color: var(--text); background: rgba(255, 255, 255, .03); }
 .link-btn:active { background: rgba(255, 255, 255, .06); }
 .link-btn svg { width: 16px; height: 16px; flex: none; }
+.link-btn[hidden] { display: none; }
+.update-btn { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.update-btn:hover:not(:disabled) { color: var(--accent-hover); }
+.update-btn:disabled { cursor: default; color: var(--accent); background: transparent; }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; transition: border-radius 200ms var(--ease), background-color 150ms ease; }
 .btn.record.recording { background: var(--danger); border-color: transparent; color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
 .btn.record.recording:hover:not(:disabled) { background: #ff5b52; }
@@ -272,6 +276,9 @@ button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-c
 }
 .row .label { flex: 1; min-width: 0; }
 .row .label .hint { color: var(--muted); font-size: 12.5px; line-height: 1.35; margin-top: 1px; }
+.row .label .hint.error { color: var(--danger-soft); }
+.row .label .hint:empty { display: none; }
+#update-hint { white-space: pre-line; }
 .row .control { display: flex; align-items: center; gap: 8px; }
 .row[hidden] { display: none; }
 

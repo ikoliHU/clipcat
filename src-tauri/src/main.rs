@@ -6,6 +6,7 @@ mod i18n;
 mod logfile;
 mod platform;
 mod settings;
+mod updater;
 
 use engine::Engine;
 use i18n::{t, tf};
@@ -452,12 +453,18 @@ fn run_action(app: &AppHandle, action: Action) {
     }
 }
 
-fn quit(app: &AppHandle) {
+/// Leállítja a rögzítőmotort (kilépéskor és frissítés telepítése előtt).
+fn stop_engine(app: &AppHandle) {
     let st = state(app);
     st.quitting.store(true, Ordering::SeqCst);
-    if let Some(engine) = st.engine.lock().unwrap().take() {
+    let engine = st.engine.lock().unwrap().take();
+    if let Some(engine) = engine {
         engine.shutdown();
     }
+}
+
+fn quit(app: &AppHandle) {
+    stop_engine(app);
     app.exit(0);
 }
 
@@ -852,6 +859,21 @@ fn resume_hotkeys(app: AppHandle) {
     let _ = register_hotkeys(&app, &current_settings(&app));
 }
 
+#[tauri::command]
+fn get_update_state(app: AppHandle) -> updater::UpdateState {
+    updater::state(&app)
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<updater::UpdateState, String> {
+    updater::check(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    updater::install(&app).await
+}
+
 // ---------- Önteszt ----------
 
 /// `ClipCat.exe --selftest <mappa>`: felület nélkül elindítja a motort, 8 másodperc után
@@ -941,8 +963,10 @@ fn main() {
             quitting: AtomicBool::new(false),
             toast_generation: AtomicU64::new(0),
         })
+        .manage(updater::Updater::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app, "gallery")))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -1001,6 +1025,7 @@ fn main() {
                 start_mic_thread();
                 start_status_thread(handle);
             });
+            updater::start(app.handle().clone());
 
             if !autostarted {
                 show_main(app.handle(), "gallery");
@@ -1025,6 +1050,9 @@ fn main() {
             is_ptt_key_supported,
             suspend_hotkeys,
             resume_hotkeys,
+            get_update_state,
+            check_update,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("a ClipCat nem indítható");

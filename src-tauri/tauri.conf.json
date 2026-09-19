@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ClipCat",
-  "version": "0.2.0",
   "identifier": "hu.peter.clipcat",
   "build": {
     "frontendDist": "../ui"
@@ -48,11 +47,23 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
     ],
     "publisher": "Peter",
     "shortDescription": "ShadowPlay-szerű visszajátszás-rögzítő"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/ikoliHU/clipcat/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJGNzg3MTVFQTlDRjVCN0MKUldSOFc4K3BYbkY0THowMW0wREp1UUErU2RkZ0tjSUw0dHV4STl5dmZuMGdDWkxLbWFTQ1h4WVMK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

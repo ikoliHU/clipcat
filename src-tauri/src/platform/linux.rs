@@ -127,7 +127,11 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             _ => Ok(()),
         };
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // AppImage-ből futva a current_exe az ideiglenes csatolási pontban van; maga a fájl az APPIMAGE
+    let exe = match std::env::var_os("APPIMAGE") {
+        Some(appimage) => PathBuf::from(appimage),
+        None => std::env::current_exe().map_err(|e| e.to_string())?,
+    };
     let entry = format!(
         "[Desktop Entry]\nType=Application\nName=ClipCat\nExec=\"{}\" --autostart\nIcon=clipcat\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
         exe.display()

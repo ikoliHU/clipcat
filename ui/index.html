@@ -40,6 +40,11 @@
         <button class="btn record" id="record"><span class="rec-dot"></span><span id="record-label" data-i18n="actions.record"></span> <kbd id="record-kbd"></kbd></button>
       </section>
 
+      <button class="link-btn update-btn" id="update-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span id="update-label"></span>
+      </button>
+
       <button class="link-btn" id="open-folder">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         <span data-i18n="actions.openFolder"></span>
@@ -170,6 +175,16 @@
               <div class="row">
                 <div class="label"><span data-i18n="settings.keepRunning.label"></span><div class="hint" data-i18n="settings.keepRunning.hint"></div></div>
                 <div class="control"><label class="switch"><input type="checkbox" name="keepObsRunning"><span></span></label></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2 data-i18n="settings.update.title"></h2>
+            <div class="group">
+              <div class="row">
+                <div class="label"><span id="update-version"></span><div class="hint" id="update-hint"></div></div>
+                <div class="control"><button type="button" class="btn" id="update-action"></button></div>
               </div>
             </div>
           </div>

@@ -501,6 +501,61 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+// ---------- Frissítés ----------
+
+let update = null;
+
+function renderUpdate(next) {
+  update = next;
+  const { phase, version, progress } = update;
+  // A talált verzió hiba után is telepíthető marad (újrapróbálás), újraellenőrzés alatt pedig látszik
+  const installable = !!version && (phase === "available" || phase === "error");
+  const working = phase === "downloading" || phase === "installing";
+
+  const pill = $("#update-btn");
+  pill.hidden = !installable && !working && !(version && phase === "checking");
+  pill.disabled = !installable;
+  pill.title = version ? t("update.pillTitle", { version }) : "";
+  $("#update-label").textContent = updateProgressText() ?? t("update.pill", { version });
+
+  $("#update-version").textContent = t("settings.update.version", { version: update.current });
+  const hint = $("#update-hint");
+  hint.classList.toggle("error", phase === "error");
+  hint.textContent = updateProgressText() ?? {
+    checking: t("update.checking"),
+    latest: t("update.latest"),
+    available: t("update.available", { version }),
+    error: update.error,
+  }[phase] ?? t("update.idle");
+  if (phase === "available" && update.notes) hint.textContent += `
+${update.notes}`;
+
+  const action = $("#update-action");
+  action.textContent = t(installable ? "update.install" : "update.check");
+  action.classList.toggle("primary", installable);
+  action.disabled = working || phase === "checking";
+}
+
+function updateProgressText() {
+  if (update.phase === "installing") return t("update.installing");
+  if (update.phase !== "downloading") return null;
+  return update.progress == null ? t("update.downloading") : t("update.downloadingProgress", { progress: update.progress });
+}
+
+async function installUpdate() {
+  try {
+    await invoke("install_update");
+  } catch (e) {
+    alert(e);
+  }
+}
+
+$("#update-btn").addEventListener("click", installUpdate);
+$("#update-action").addEventListener("click", () => {
+  if (update?.version && (update.phase === "available" || update.phase === "error")) installUpdate();
+  else invoke("check_update").catch(() => {}); // a hiba az update eseménnyel érkezik
+});
+
 // ---------- Indulás ----------
 
 async function init() {
@@ -509,11 +564,13 @@ async function init() {
   settings = await invoke("get_settings");
   renderHotkeyHints();
   renderStatus(await invoke("get_status"));
+  renderUpdate(await invoke("get_update_state"));
   await loadClips();
 
   listen("status", (e) => renderStatus(e.payload));
   listen("clip-saved", () => loadClips());
   listen("open-view", (e) => showView(e.payload));
+  listen("update", (e) => renderUpdate(e.payload));
 }
 
 init();
