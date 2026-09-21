@@ -13,6 +13,8 @@ use i18n::{t, tf};
 use serde::Serialize;
 use serde_json::json;
 use settings::Settings;
+#[cfg(windows)]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -33,6 +35,7 @@ const TOAST_DURATION: Duration = Duration::from_millis(3800);
 const TOAST_MARGIN: i32 = 24;
 const RECOVER_COOLDOWN: Duration = Duration::from_secs(20);
 const PTT_RELEASE_DELAY: Duration = Duration::from_millis(200);
+const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// A push-to-talk szál ezekből olvas, hogy ne kelljen zárat vennie.
 static MIC_MODE: AtomicU32 = AtomicU32::new(MIC_OFF);
@@ -68,6 +71,8 @@ struct AppState {
     settings: Mutex<Settings>,
     status: Mutex<Status>,
     shortcuts: Mutex<Vec<(Shortcut, Action)>>,
+    /// A natív és a polling gyorsbillentyű-esemény ugyanazt a lenyomást ne futtassa kétszer.
+    last_shortcut: Mutex<[Option<Instant>; 4]>,
     /// A tálcamenü állapotfüggő elemei: (felvétel, visszajátszás)
     tray_items: Mutex<Option<(MenuItem<Wry>, MenuItem<Wry>)>>,
     engine: Mutex<Option<Engine>>,
@@ -468,6 +473,51 @@ fn run_action(app: &AppHandle, action: Action) {
         Action::OpenFolder => open_last_folder(app),
         Action::Gallery => show_main(app, "gallery"),
     }
+}
+
+fn run_shortcut_action(app: &AppHandle, action: Action) -> bool {
+    let index = match action {
+        Action::Save => 0,
+        Action::Record => 1,
+        Action::OpenFolder => 2,
+        Action::Gallery => 3,
+    };
+    let st = state(app);
+    let mut last = st.last_shortcut.lock().unwrap();
+    if last[index].is_some_and(|at| at.elapsed() < HOTKEY_DEBOUNCE) {
+        return false;
+    }
+    last[index] = Some(Instant::now());
+    drop(last);
+    run_action(app, action);
+    true
+}
+
+/// Néhány játék (pl. League of Legends) fókuszban elnyeli a WM_HOTKEY eseményt.
+/// Windowson a fizikai billentyűállapotot is figyeljük; az élváltás és a debounce
+/// megakadályozza az ismétlést, ha a natív esemény is megérkezik.
+#[cfg(windows)]
+fn start_hotkey_fallback(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut down = HashSet::new();
+        loop {
+            let shortcuts = state(&app).shortcuts.lock().unwrap().clone();
+            down.retain(|shortcut| shortcuts.iter().any(|(candidate, _)| candidate == shortcut));
+            for (shortcut, action) in shortcuts {
+                if platform::shortcut_down(&shortcut) {
+                    if down.insert(shortcut) && run_shortcut_action(&app, action) {
+                        logfile::write(&format!(
+                            "Gyorsbillentyű polling fallback: {}",
+                            pretty_hotkey(&shortcut.into_string())
+                        ));
+                    }
+                } else {
+                    down.remove(&shortcut);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    });
 }
 
 /// Leállítja a rögzítőmotort (kilépéskor és frissítés telepítése előtt).
@@ -878,6 +928,7 @@ fn is_ptt_key_supported(vk: u32) -> bool {
 #[tauri::command]
 fn suspend_hotkeys(app: AppHandle) {
     let _ = app.global_shortcut().unregister_all();
+    state(&app).shortcuts.lock().unwrap().clear();
 }
 
 #[tauri::command]
@@ -992,6 +1043,7 @@ fn main() {
             settings: Mutex::new(settings.clone()),
             status: Mutex::new(Status::default()),
             shortcuts: Mutex::new(Vec::new()),
+            last_shortcut: Mutex::new([None; 4]),
             tray_items: Mutex::new(None),
             engine: Mutex::new(None),
             engine_error: Mutex::new(None),
@@ -1019,7 +1071,7 @@ fn main() {
                         .find(|(s, _)| s == shortcut)
                         .map(|(_, a)| *a);
                     if let Some(action) = action {
-                        run_action(app, action);
+                        run_shortcut_action(app, action);
                     }
                 })
                 .build(),
@@ -1058,6 +1110,8 @@ fn main() {
                 if settings.replay_enabled { "bekapcsolva" } else { "szünetel (legutóbb leállítva)" }
             ));
             let hotkey_error = register_hotkeys(&handle, &settings).err();
+            #[cfg(windows)]
+            start_hotkey_fallback(handle.clone());
             std::thread::spawn(move || {
                 platform::migrate_legacy();
                 start_engine(&handle);

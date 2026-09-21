@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use tauri::WebviewWindow;
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW,
@@ -163,6 +164,138 @@ pub fn foreground_window() -> Option<WindowInfo> {
 /// Le van-e nyomva a billentyű vagy egérgomb (virtuális kód), bármelyik ablak is aktív.
 pub fn key_down(vk: u32) -> bool {
     unsafe { (GetAsyncKeyState(vk as i32) as u16) & 0x8000 != 0 }
+}
+
+/// A RegisterHotKey eseményét egyes játékok elnyelik. A fizikai billentyűállapotból
+/// ugyanazt a kombinációt felismerjük, így azok fókuszában is működnek a gyorsbillentyűk.
+pub fn shortcut_down(shortcut: &Shortcut) -> bool {
+    let modifier = |pressed, wanted| pressed == wanted;
+    modifier(key_down(0x10), shortcut.mods.contains(Modifiers::SHIFT))
+        && modifier(key_down(0x11), shortcut.mods.contains(Modifiers::CONTROL))
+        && modifier(key_down(0x12), shortcut.mods.contains(Modifiers::ALT))
+        && modifier(key_down(0x5b) || key_down(0x5c), shortcut.mods.contains(Modifiers::SUPER))
+        && key_to_vk(shortcut.key).is_some_and(key_down)
+}
+
+/// Ugyanaz a Code -> Windows virtual-key leképezés, amelyet a global-hotkey használ.
+fn key_to_vk(key: Code) -> Option<u32> {
+    Some(match key {
+        Code::KeyA => 0x41,
+        Code::KeyB => 0x42,
+        Code::KeyC => 0x43,
+        Code::KeyD => 0x44,
+        Code::KeyE => 0x45,
+        Code::KeyF => 0x46,
+        Code::KeyG => 0x47,
+        Code::KeyH => 0x48,
+        Code::KeyI => 0x49,
+        Code::KeyJ => 0x4a,
+        Code::KeyK => 0x4b,
+        Code::KeyL => 0x4c,
+        Code::KeyM => 0x4d,
+        Code::KeyN => 0x4e,
+        Code::KeyO => 0x4f,
+        Code::KeyP => 0x50,
+        Code::KeyQ => 0x51,
+        Code::KeyR => 0x52,
+        Code::KeyS => 0x53,
+        Code::KeyT => 0x54,
+        Code::KeyU => 0x55,
+        Code::KeyV => 0x56,
+        Code::KeyW => 0x57,
+        Code::KeyX => 0x58,
+        Code::KeyY => 0x59,
+        Code::KeyZ => 0x5a,
+        Code::Digit0 => 0x30,
+        Code::Digit1 => 0x31,
+        Code::Digit2 => 0x32,
+        Code::Digit3 => 0x33,
+        Code::Digit4 => 0x34,
+        Code::Digit5 => 0x35,
+        Code::Digit6 => 0x36,
+        Code::Digit7 => 0x37,
+        Code::Digit8 => 0x38,
+        Code::Digit9 => 0x39,
+        Code::Equal => 0xbb,
+        Code::Comma => 0xbc,
+        Code::Minus => 0xbd,
+        Code::Period => 0xbe,
+        Code::Semicolon => 0xba,
+        Code::Slash => 0xbf,
+        Code::Backquote => 0xc0,
+        Code::BracketLeft => 0xdb,
+        Code::Backslash => 0xdc,
+        Code::BracketRight => 0xdd,
+        Code::Quote => 0xde,
+        Code::Backspace => 0x08,
+        Code::Tab => 0x09,
+        Code::Enter | Code::NumpadEnter => 0x0d,
+        Code::Pause | Code::MediaPause => 0x13,
+        Code::CapsLock => 0x14,
+        Code::Escape => 0x1b,
+        Code::Space => 0x20,
+        Code::PageUp => 0x21,
+        Code::PageDown => 0x22,
+        Code::End => 0x23,
+        Code::Home => 0x24,
+        Code::ArrowLeft => 0x25,
+        Code::ArrowUp => 0x26,
+        Code::ArrowRight => 0x27,
+        Code::ArrowDown => 0x28,
+        Code::PrintScreen => 0x2c,
+        Code::Insert => 0x2d,
+        Code::Delete => 0x2e,
+        Code::F1 => 0x70,
+        Code::F2 => 0x71,
+        Code::F3 => 0x72,
+        Code::F4 => 0x73,
+        Code::F5 => 0x74,
+        Code::F6 => 0x75,
+        Code::F7 => 0x76,
+        Code::F8 => 0x77,
+        Code::F9 => 0x78,
+        Code::F10 => 0x79,
+        Code::F11 => 0x7a,
+        Code::F12 => 0x7b,
+        Code::F13 => 0x7c,
+        Code::F14 => 0x7d,
+        Code::F15 => 0x7e,
+        Code::F16 => 0x7f,
+        Code::F17 => 0x80,
+        Code::F18 => 0x81,
+        Code::F19 => 0x82,
+        Code::F20 => 0x83,
+        Code::F21 => 0x84,
+        Code::F22 => 0x85,
+        Code::F23 => 0x86,
+        Code::F24 => 0x87,
+        Code::NumLock => 0x90,
+        Code::ScrollLock => 0x91,
+        Code::Numpad0 => 0x60,
+        Code::Numpad1 => 0x61,
+        Code::Numpad2 => 0x62,
+        Code::Numpad3 => 0x63,
+        Code::Numpad4 => 0x64,
+        Code::Numpad5 => 0x65,
+        Code::Numpad6 => 0x66,
+        Code::Numpad7 => 0x67,
+        Code::Numpad8 => 0x68,
+        Code::Numpad9 => 0x69,
+        Code::NumpadMultiply => 0x6a,
+        Code::NumpadAdd => 0x6b,
+        Code::NumpadSubtract => 0x6d,
+        Code::NumpadDecimal => 0x6e,
+        Code::NumpadDivide => 0x6f,
+        Code::NumpadEqual => 0x45,
+        Code::AudioVolumeMute => 0xad,
+        Code::AudioVolumeDown => 0xae,
+        Code::AudioVolumeUp => 0xaf,
+        Code::MediaTrackNext => 0xb0,
+        Code::MediaTrackPrevious => 0xb1,
+        Code::MediaStop => 0xb2,
+        Code::MediaPlay | Code::MediaPlayPause => 0xb3,
+        _ => return None,
+    })
 }
 
 /// Helyi idő a megadott mintával: %Y %m %d %H %M %S.
