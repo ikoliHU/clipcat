@@ -83,7 +83,6 @@
   "settings.language.hint": "Initially matches your Windows display language. Unsupported languages use English US. Changes apply after saving.",
   "settings.info.title": "Info",
   "settings.info.license": "License",
-  "settings.info.licensePending": "The license will be published in the repository.",
   "settings.info.repository": "Open the GitHub repository",
   "settings.showNotification.label": "Notify when saving",
   "settings.showNotification.hint": "In the top-right corner of the screen, over your game.",

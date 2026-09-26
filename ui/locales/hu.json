@@ -83,7 +83,6 @@
   "settings.language.hint": "Kezdetben a Windows megjelenítési nyelve; nem támogatott nyelvnél English US. A változás mentés után érvényes.",
   "settings.info.title": "Infó",
   "settings.info.license": "Licenc",
-  "settings.info.licensePending": "A licenc később kerül közzétételre a repóban.",
   "settings.info.repository": "GitHub-repository megnyitása",
   "settings.showNotification.label": "Értesítés mentéskor",
   "settings.showNotification.hint": "A képernyő jobb felső sarkában, a játék fölött.",

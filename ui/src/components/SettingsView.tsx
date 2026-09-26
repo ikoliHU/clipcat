@@ -301,7 +301,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
 
         <Card title={t("settings.info.title")}>
           {update && <UpdateRow update={update} />}
-          <Row label={t("settings.info.license")} hints={[t("settings.info.licensePending")]}>
+          <Row label={t("settings.info.license")}>
             <Button onClick={() => invoke("open_project_link", { target: "license" }).catch((e) => setMessage({ text: String(e), tone: "error" }))}>
               {t("settings.info.license")}
             </Button>

@@ -5,7 +5,7 @@
 ### Újdonságok
 
 - Magyar és English US fordítás, a Windows megjelenítési nyelvét követő kezdeti választással.
-- Infó-szekció a beállítások alján: frissítéskeresés, előkészített licenchivatkozás és GitHub ikon.
+- Infó-szekció a beállítások alján: frissítéskeresés, licenchivatkozás és GitHub ikon.
 
 ### Javítva
 

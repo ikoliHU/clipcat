@@ -9,7 +9,7 @@ A mentett kézi választás később megmarad. Mentés után a felület, tálcam
 
 A beállítások alján az **Infó** rész tartalmazza a verziót, a frissítéskeresést, a licenchivatkozást
 és a GitHub ikont. A repository a [catninth/clipcat](https://github.com/catninth/clipcat).
-A licenc még nincs közzétéve; a gomb az előkészített `main/LICENSE` útvonalra mutat.
+A Licenc gomb a megadott [MPL-2.0 licencfájlt](https://github.com/catninth/cutcat/blob/main/LICENSE) nyitja meg.
 
 ## Kiadás és frissítések
 

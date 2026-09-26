@@ -1,5 +1,5 @@
 pub const REPOSITORY: &str = "https://github.com/catninth/clipcat";
-pub const LICENSE: &str = "https://github.com/catninth/clipcat/blob/main/LICENSE";
+pub const LICENSE: &str = "https://github.com/catninth/cutcat/blob/main/LICENSE";
 
 pub fn project_url(target: &str) -> Option<&'static str> {
     match target {

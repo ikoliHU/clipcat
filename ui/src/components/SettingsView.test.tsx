@@ -57,7 +57,7 @@ it("saves English US and updates all visible settings without restarting", async
   expect(document.documentElement.lang).toBe("en-US");
 });
 
-it("places update, future license and accessible GitHub button in the bottom Info section", async () => {
+it("places update, license and accessible GitHub button in the bottom Info section", async () => {
   i18n.lang = "en-US"; i18n.messages = en;
   vi.mocked(invoke).mockImplementation(async command => command === "list_mics" ? [] as never : false as never);
   render(<SettingsView settings={{ ...settings, language: "en-US" }} onSaved={vi.fn()} onStatus={vi.fn()}
@@ -67,7 +67,6 @@ it("places update, future license and accessible GitHub button in the bottom Inf
   fireEvent.click(screen.getByRole("button", { name: en["settings.info.license"] }));
   expect(invoke).toHaveBeenCalledWith("open_project_link", { target: "repository" });
   expect(invoke).toHaveBeenCalledWith("open_project_link", { target: "license" });
-  expect(screen.getByText(en["settings.info.licensePending"])).toBeTruthy();
   expect(screen.getByText("ClipCat v0.4.1")).toBeTruthy();
   expect(screen.getAllByRole("heading").at(-1)?.textContent).toBe("Info");
 });
