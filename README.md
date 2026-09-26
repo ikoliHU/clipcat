@@ -1,5 +1,39 @@
 # clipcat
 
+ShadowPlay-style replay recorder with an embedded OBS capture engine, a clip gallery, and configurable recording controls.
+
+## Screenshots
+
+<p align="center">
+  <a href="docs/gallery/gallery/overview.png">
+    <img src="docs/gallery/gallery/overview.png" alt="ClipCat gallery with game filters, clip previews, and replay controls" width="100%">
+  </a>
+</p>
+
+<p align="center">
+  <a href="docs/gallery/player/playback.png">
+    <img src="docs/gallery/player/playback.png" alt="ClipCat built-in video player and clip actions" width="49%">
+  </a>
+  <a href="docs/gallery/settings/capture.png">
+    <img src="docs/gallery/settings/capture.png" alt="ClipCat capture settings for replay length, quality, and desktop recording" width="49%">
+  </a>
+</p>
+
+<p align="center">
+  <a href="docs/gallery/settings/push-to-talk.png">
+    <img src="docs/gallery/settings/push-to-talk.png" alt="ClipCat microphone, push-to-talk, and keyboard shortcuts" width="49%">
+  </a>
+  <a href="docs/gallery/settings/disk-buffer.png">
+    <img src="docs/gallery/settings/disk-buffer.png" alt="ClipCat disk buffer settings for longer replays" width="49%">
+  </a>
+</p>
+
+<p align="center">
+  <a href="docs/gallery/README.md"><strong>Browse the full feature gallery →</strong></a>
+</p>
+
+Screenshots show the English UI with sample clips and simulated capture state. See the gallery for all 28 images and capture details.
+
 ## Language and Info
 
 The **Language** field in Settings switches between Hungarian and English US. On first launch,
