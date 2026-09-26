@@ -140,6 +140,10 @@ pub fn game_settings(data: Data) -> Data {
     data
 }
 
+pub fn game_window() -> Option<String> {
+    None
+}
+
 /// Save the portal's restore token for the next launch.
 pub fn persist_display(api: &Api, display: Ptr) {
     if !wayland() || display.is_null() {

@@ -24,6 +24,8 @@ pub struct Monitor {
 
 pub struct WindowInfo {
     pub title: String,
+    #[cfg(windows)]
+    pub class: String,
     /// Executable filename (including the extension on Windows)
     pub exe: String,
     pub fullscreen: bool,

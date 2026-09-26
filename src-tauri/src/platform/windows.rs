@@ -23,8 +23,9 @@ use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNa
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows_sys::Win32::UI::Shell::{SHFileOperationW, SHFILEOPSTRUCTW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-    IsZoomed, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, MB_ICONASTERISK, MB_ICONEXCLAMATION, SWP_NOACTIVATE,
+    GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
+    GetWindowThreadProcessId, IsZoomed, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, MB_ICONASTERISK,
+    MB_ICONEXCLAMATION, SWP_NOACTIVATE,
     SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
@@ -122,6 +123,8 @@ pub fn foreground_window() -> Option<WindowInfo> {
         }
         let mut title = [0u16; 512];
         let len = GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32).max(0) as usize;
+        let mut class = [0u16; 512];
+        let class_len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32).max(0) as usize;
 
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &mut pid);
@@ -139,6 +142,7 @@ pub fn foreground_window() -> Option<WindowInfo> {
 
         Some(WindowInfo {
             title: String::from_utf16_lossy(&title[..len]),
+            class: String::from_utf16_lossy(&class[..class_len]),
             exe,
             fullscreen: fullscreen_monitor(hwnd).is_some(),
         })

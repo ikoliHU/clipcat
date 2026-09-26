@@ -36,6 +36,9 @@ const NON_GAMES: &[&str] = &[
 
 pub fn folder_for(window: Option<WindowInfo>) -> String {
     let Some(window) = window else { return DESKTOP_FOLDER.into() };
+    if !is_game(&window) {
+        return DESKTOP_FOLDER.into();
+    }
     let exe = window.exe.to_lowercase();
     if let Some(rule) = RULES
         .iter()
@@ -43,15 +46,21 @@ pub fn folder_for(window: Option<WindowInfo>) -> String {
     {
         return rule.folder.into();
     }
-    if !window.fullscreen || NON_GAMES.contains(&exe.as_str()) {
-        return DESKTOP_FOLDER.into();
-    }
     let from_title = sanitize(&clean_title(&window.title));
     if !from_title.is_empty() {
         return from_title;
     }
     let from_exe = sanitize(exe.trim_end_matches(".exe"));
     if from_exe.is_empty() { DESKTOP_FOLDER.into() } else { from_exe }
+}
+
+/// Use the same classification for naming clips and selecting the capture target.
+pub fn is_game(window: &WindowInfo) -> bool {
+    let exe = window.exe.to_lowercase();
+    !exe.is_empty()
+        && !NON_GAMES.contains(&exe.as_str())
+        && (window.fullscreen
+            || RULES.iter().any(|r| r.exe == exe && r.title_prefix.is_none_or(|p| window.title.starts_with(p))))
 }
 
 /// "Minecraft* 1.21.1 - Multiplayer" -> "Minecraft"

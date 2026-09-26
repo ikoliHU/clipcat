@@ -89,6 +89,7 @@ fn engine() -> Engine {
         config: config(),
         scene: null_mut(),
         game: null_mut(),
+        game_window: None,
         display: null_mut(),
         display_item: null_mut(),
         desktop_audio: null_mut(),
@@ -108,6 +109,63 @@ fn engine() -> Engine {
         memory_buffer_bytes: 0,
         initialized: true,
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn capture_retargets_games_clears_on_focus_loss_and_does_not_restart_unchanged_target() {
+    static SETTINGS: Mutex<(String, String, i64)> = Mutex::new((String::new(), String::new(), -1));
+    static UPDATES: Mutex<Vec<(String, String, i64)>> = Mutex::new(Vec::new());
+    unsafe extern "C" fn set_string(_: Ptr, key: *const c_char, value: *const c_char) {
+        let mut settings = SETTINGS.lock().unwrap();
+        let value = CStr::from_ptr(value).to_string_lossy().into_owned();
+        match CStr::from_ptr(key).to_bytes() {
+            b"capture_mode" => settings.0 = value,
+            b"window" => settings.1 = value,
+            _ => (),
+        }
+    }
+    unsafe extern "C" fn set_int(_: Ptr, key: *const c_char, value: i64) {
+        if CStr::from_ptr(key).to_bytes() == b"priority" {
+            SETTINGS.lock().unwrap().2 = value;
+        }
+    }
+    unsafe extern "C" fn update(source: Ptr, _: Ptr) {
+        assert_eq!(source as usize, 50);
+        UPDATES.lock().unwrap().push(SETTINGS.lock().unwrap().clone());
+    }
+
+    let _serial = TEST_LOCK.lock().unwrap();
+    let mut e = engine();
+    let mut api = Api::fake();
+    api.obs_data_set_string = set_string;
+    api.obs_data_set_int = set_int;
+    api.obs_source_update = update;
+    e.api = Box::leak(Box::new(api));
+    e.game = 50 as Ptr;
+    UPDATES.lock().unwrap().clear();
+
+    e.update_game_window(None); // Fullscreen VLC is not a game target.
+    let lol = Some("League of Legends:RiotWindowClass:League of Legends.exe".into());
+    e.update_game_window(lol.clone());
+    GAME_HOOKED.store(true, Ordering::SeqCst);
+    e.update_game_window(lol.clone());
+    assert!(GAME_HOOKED.load(Ordering::SeqCst));
+    let minecraft = Some("Minecraft:GLFW30:javaw.exe".into());
+    e.update_game_window(minecraft.clone());
+    assert!(!GAME_HOOKED.load(Ordering::SeqCst));
+    GAME_HOOKED.store(true, Ordering::SeqCst);
+    e.update_game_window(None); // Alt-tab back to the video player releases the game.
+    assert!(!GAME_HOOKED.load(Ordering::SeqCst));
+    e.update_game_window(None);
+    e.update_game_window(lol.clone());
+
+    assert_eq!(*UPDATES.lock().unwrap(), vec![
+        ("window".into(), lol.clone().unwrap(), 2),
+        ("window".into(), minecraft.unwrap(), 2),
+        ("window".into(), String::new(), 2),
+        ("window".into(), lol.unwrap(), 2),
+    ]);
 }
 
 #[test]

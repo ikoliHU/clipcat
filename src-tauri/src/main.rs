@@ -411,9 +411,18 @@ fn refresh_status(app: &AppHandle) {
 
 fn start_status_thread(app: AppHandle) {
     std::thread::spawn(move || {
+        let mut last_status = Instant::now() - Duration::from_secs(2);
         while !state(&app).quitting.load(Ordering::SeqCst) {
-            refresh_status(&app);
-            std::thread::sleep(Duration::from_secs(2));
+            if let Ok(mut slot) = state(&app).engine.try_lock() {
+                if let Some(engine) = slot.as_mut() {
+                    engine.sync_capture_target();
+                }
+            }
+            if last_status.elapsed() >= Duration::from_secs(2) {
+                refresh_status(&app);
+                last_status = Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(250));
         }
     });
 }

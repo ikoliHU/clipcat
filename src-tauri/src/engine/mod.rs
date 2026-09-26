@@ -209,7 +209,7 @@ static GAME_ITEM: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static DESKTOP_WANTED: AtomicBool = AtomicBool::new(false);
 static REPLAY_WANTED: AtomicBool = AtomicBool::new(false);
 static RECORDING_WANTED: AtomicBool = AtomicBool::new(false);
-/// Game capture is currently recording a fullscreen game that covers the desktop
+/// Game capture is currently recording the selected game.
 static GAME_HOOKED: AtomicBool = AtomicBool::new(false);
 static VISIBILITY_LOCK: Mutex<()> = Mutex::new(());
 
@@ -478,6 +478,7 @@ pub struct Engine {
     config: Config,
     scene: Ptr,
     game: Ptr,
+    game_window: Option<String>,
     display: Ptr,
     display_item: Ptr,
     desktop_audio: Ptr,
@@ -664,6 +665,7 @@ impl Engine {
             config: config.clone(),
             scene: null_mut(),
             game: null_mut(),
+            game_window: None,
             display: null_mut(),
             display_item: null_mut(),
             desktop_audio: null_mut(),
@@ -709,6 +711,28 @@ impl Engine {
             return null_mut();
         }
         unsafe { (self.api.obs_source_create)(cs(id).as_ptr(), cs(name).as_ptr(), settings.ptr, null_mut()) }
+    }
+
+    /// Auto fullscreen capture can stay hooked to a background video player indefinitely.
+    /// Retarget explicitly when focus changes, including clearing the target for non-games.
+    pub fn sync_capture_target(&mut self) {
+        if self.game.is_null() {
+            return;
+        }
+        let capturing = REPLAY_WANTED.load(Ordering::SeqCst) || RECORDING_WANTED.load(Ordering::SeqCst);
+        self.update_game_window(if capturing { sys::game_window() } else { None });
+    }
+
+    fn update_game_window(&mut self, window: Option<String>) {
+        if self.game_window == window {
+            return;
+        }
+        let settings = sys::game_settings(Data::new(self.api)).str("window", window.as_deref().unwrap_or(""));
+        unsafe { (self.api.obs_source_update)(self.game, settings.ptr) };
+        GAME_HOOKED.store(false, Ordering::SeqCst);
+        logfile::write(&format!("Game capture target: {}", window.as_deref().unwrap_or("none")));
+        self.game_window = window;
+        refresh_visibility();
     }
 
     fn create_sources(&mut self) -> Result<(), String> {
@@ -881,6 +905,7 @@ impl Engine {
         if self.output.is_null() {
             return Err(t("engine.replayNotCreated"));
         }
+        self.sync_capture_target();
         if let Some(dir) = &self.config.buffer_dir {
             // Start with a new, empty segment queue every time
             let first = disk::begin(Path::new(dir), self.config.buffer_seconds, self.config.bitrate_kbps)?;
@@ -977,6 +1002,7 @@ impl Engine {
             "movflags=frag_keyframe+empty_moov+default_base_moof flush_packets=1",
         );
         set_recording_wanted(true);
+        self.sync_capture_target();
         if let Err(error) = self.sync_audio() {
             set_recording_wanted(false);
             let _ = self.sync_audio();
