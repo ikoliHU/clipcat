@@ -55,6 +55,8 @@ jobs:
       - run: npm ci
 
       - run: npm test
+      # Native tests embed frontendDist through tauri::generate_context!().
+      - run: npm run build
       - name: Prepare and verify capture bundle
         if: runner.os == 'Windows'
         shell: pwsh
