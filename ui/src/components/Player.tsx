@@ -43,6 +43,11 @@ export function Player({ clip, onClose, onDelete }: Props) {
 
   const withClose = (action: (clip: Clip) => void) => () => {
     const current = clip!;
+    // Release media before native actions; onClose's effect runs after this handler.
+    const player = video.current!;
+    player.pause();
+    player.removeAttribute("src");
+    player.load();
     onClose();
     action(current);
   };

@@ -354,16 +354,33 @@ fn hide(hwnd: HWND) {
     }
 }
 
+fn recycle_source(path: &str) -> Vec<u16> {
+    // canonicalize() adds a verbatim prefix that SHFileOperationW rejects.
+    // Keep UNC paths absolute when converting them back to Shell syntax.
+    let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    };
+    let mut from: Vec<u16> = OsStr::new(&path).encode_wide().collect();
+    from.extend([0, 0]);
+    from
+}
+
 /// Move to the recycle bin (recoverable deletion).
 pub fn recycle(path: &str) -> bool {
-    let mut from: Vec<u16> = OsStr::new(path).encode_wide().collect();
-    from.extend([0, 0]);
+    let from = recycle_source(path);
     unsafe {
         let mut op: SHFILEOPSTRUCTW = zeroed();
         op.wFunc = FO_DELETE as _;
         op.pFrom = from.as_ptr();
         op.fFlags = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI) as _;
-        SHFileOperationW(&mut op) == 0 && op.fAnyOperationsAborted == 0
+        let result = SHFileOperationW(&mut op);
+        if result != 0 || op.fAnyOperationsAborted != 0 {
+            logfile::write(&format!("Recycle failed: code={result:#x}, aborted={}", op.fAnyOperationsAborted));
+            return false;
+        }
+        true
     }
 }
 
@@ -435,6 +452,33 @@ fn cleanup_legacy(state_dir: &std::path::Path, config_dir: &std::path::Path) {
     }
     let _ = std::fs::remove_file(config_dir.join("shadowplay.lua"));
     logfile::write("Removed remnants of the legacy separate-OBS-process setup");
+}
+
+#[cfg(test)]
+mod recycle_tests {
+    #[test]
+    fn shell_sources_preserve_drive_and_unc_paths_and_have_two_terminators() {
+        for (input, expected) in [
+            (r"\\?\C:\Clips\clip with spaces.mp4", r"C:\Clips\clip with spaces.mp4"),
+            (r"\\?\UNC\server\share\clip.mp4", r"\\server\share\clip.mp4"),
+            (r"C:\Clips\clip.mp4", r"C:\Clips\clip.mp4"),
+            (r"\\server\share\clip.mp4", r"\\server\share\clip.mp4"),
+        ] {
+            let source = super::recycle_source(input);
+            assert_eq!(String::from_utf16(&source[..source.len() - 2]).unwrap(), expected);
+            assert_eq!(&source[source.len() - 2..], &[0, 0]);
+        }
+    }
+
+    #[test]
+    fn recycles_a_validated_canonical_clip_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("clip with spaces.mp4");
+        std::fs::write(&clip, b"recycle regression fixture").unwrap();
+        let checked = crate::clips::checked_path(dir.path(), &clip).unwrap();
+        assert!(super::recycle(&checked.to_string_lossy()));
+        assert!(!clip.exists());
+    }
 }
 
 #[cfg(test)]
