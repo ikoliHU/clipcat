@@ -432,6 +432,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "catninth-updater"
+version = "0.1.0"
+source = "git+https://github.com/catninth/updater?rev=961fdabb33a461c9f1e5a46366e766b781be5c8b#961fdabb33a461c9f1e5a46366e766b781be5c8b"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "minisign-verify",
+ "reqwest",
+ "rustls",
+ "semver",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin-updater",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -488,8 +508,10 @@ dependencies = [
 
 [[package]]
 name = "clipcat"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
+ "async-trait",
+ "catninth-updater",
  "glib",
  "libc",
  "libloading 0.8.9",
@@ -4230,7 +4252,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

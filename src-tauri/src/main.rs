@@ -1209,7 +1209,6 @@ fn main() {
             quitting: AtomicBool::new(false),
             toast_generation: AtomicU64::new(0),
         })
-        .manage(updater::Updater::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app, "gallery")))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1283,7 +1282,7 @@ fn main() {
                 start_mic_thread(handle.clone());
                 start_status_thread(handle);
             });
-            updater::start(app.handle().clone());
+            updater::setup(app.handle())?;
 
             if !autostarted {
                 show_main(app.handle(), "gallery");

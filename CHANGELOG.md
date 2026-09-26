@@ -1,5 +1,15 @@
 # Változásnapló
 
+## 0.6.0 – 2026-09-26
+
+### Updates
+
+- Use the shared `catninth-updater` Rust library for stable GitHub release checks, patch notes, signed downloads, and installation.
+- Preserve automatic checks every six hours, localized notifications, and user-triggered installation.
+- Recheck recording and clip-saving activity after downloading and reserve installation under the capture operation lock.
+- Stop the capture engine and release the single-instance lock before handing off to the Windows installer or restarting after installation.
+- Add updater state, progress, version precedence, and capture/installation regression tests.
+
 ## 0.5.0 – 2026-09-26
 
 ### Újdonságok

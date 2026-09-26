@@ -13,10 +13,13 @@ A Licenc gomb a megadott [MPL-2.0 licencfájlt](https://github.com/catninth/cutc
 
 ## Kiadás és frissítések
 
-A ClipCat magától keres frissítést (indulás után, majd 6 óránként) a
-`https://github.com/catninth/clipcat/releases/latest/download/latest.json` alapján, és
-kérésre telepíti: Windowson az NSIS-telepítővel, Linuxon az AppImage cseréjével, illetve a
-deb/rpm csomagot `pkexec`-kel telepítve.
+ClipCat uses the shared [`catninth-updater`](https://github.com/catninth/updater)
+Rust library. It checks stable releases from `catninth/clipcat` after 20 seconds,
+then every six hours, and displays the GitHub release body as patch notes.
+Installation is user-triggered and uses the selected tag's signed `latest.json`:
+NSIS on Windows, AppImage replacement or `.deb`/`.rpm` installation through `pkexec`
+on Linux. Recording and clip-saving guards remain in ClipCat.
+See [the updater integration guide](docs/updater.md) for configuration and lifecycle details.
 
 Új verzió kiadása:
 

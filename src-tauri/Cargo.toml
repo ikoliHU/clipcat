@@ -1,6 +1,6 @@
 [package]
 name = "clipcat"
-version = "0.5.0"
+version = "0.6.0"
 description = "ShadowPlay-szerű visszajátszás-rögzítő beágyazott libobs-szal"
 edition = "2021"
 
@@ -8,11 +8,13 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+async-trait = "0.1"
+catninth-updater = { git = "https://github.com/catninth/updater", rev = "961fdabb33a461c9f1e5a46366e766b781be5c8b", features = ["tauri"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = "2.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libloading = "0.8"
