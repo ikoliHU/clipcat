@@ -20,8 +20,10 @@ deb/rpm csomagot `pkexec`-kel telepítve.
 
 Új verzió kiadása:
 
-1. Emeld a verziót a `src-tauri/Cargo.toml`-ban (a `tauri.conf.json` ezt használja).
-2. Actions → **release** → *Run workflow*, `publish` bepipálva, opcionálisan release notes-szal.
+1. Emeld a verziót a `src-tauri/Cargo.toml`-ban és a `src-tauri/Cargo.lock` saját `clipcat`
+   bejegyzésében (a `tauri.conf.json` a Cargo-verziót használja), majd frissítsd a `CHANGELOG.md`-t.
+2. Commit és push után Actions → **release** → *Run workflow*, `publish` bepipálva,
+   az előző kiadások formáját követő angol release notes-szal.
    Ez `v<verzió>` kiadást készít a telepítőkkel, az aláírásokkal és a `latest.json`-nal.
 
 A `release` workflow minden éjjel `nightly` pre-release-t is készít; ezt a frissítő nem látja.
