@@ -1,6 +1,6 @@
 [package]
 name = "clipcat"
-version = "0.6.0"
+version = "0.6.1"
 description = "ShadowPlay-style replay recorder with embedded libobs"
 edition = "2021"
 
