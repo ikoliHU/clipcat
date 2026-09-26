@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-disk-buffer-available"
+description = "Enables the disk_buffer_available command without any pre-configured scope."
+commands.allow = ["disk_buffer_available"]
+
+[[permission]]
+identifier = "deny-disk-buffer-available"
+description = "Denies the disk_buffer_available command without any pre-configured scope."
+commands.deny = ["disk_buffer_available"]

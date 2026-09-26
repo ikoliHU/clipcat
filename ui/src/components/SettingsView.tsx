@@ -3,17 +3,18 @@ import type { FormEvent, ReactNode } from "react";
 import { captureInput, isCapturing } from "../lib/capture";
 import type { Captured } from "../lib/capture";
 import { cx, formatDuration, prettyHotkey } from "../lib/format";
-import { t } from "../lib/i18n";
+import { loadLocale, t } from "../lib/i18n";
 import { invoke } from "../lib/tauri";
 import type { HotkeyField, Mic, Settings, Status, UpdateState } from "../lib/tauri";
 import { Button, Card, Keycap, Range, Row, Select, Switch, TextInput, Value } from "./ui";
 import { installUpdate, isInstallable, updateProgressText } from "./updates";
+import { GithubIcon } from "./icons";
 
 // Ajánlott bitráta 1080p H.264-hez; a gyors NVENC preset és a kikapcsolt B-képkockák miatt
 // magasabb a ShadowPlay értékeinél. A felső határ a settings.rs max_bitrate_mbps táblája.
 const BITRATE_1080P: Record<number, number> = { 30: 20, 60: 30, 120: 45, 144: 50 };
 const MAX_BITRATE: Record<number, number> = { 30: 80, 60: 100, 120: 130, 144: 150 };
-const MIN_BITRATE = 10;
+const MIN_BITRATE = 5;
 
 const AUDIO_MBPS = 0.192;
 const DISK_DAILY_HOURS = 4;
@@ -50,6 +51,14 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const messageTimer = useRef(0);
+  const [budget, setBudget] = useState<{ maxMb: number; seconds: number } | null>(null);
+  useEffect(() => {
+    if (!draft || draft.bufferStorage !== "memory") return;
+    let alive = true;
+    invoke<{ maxMb: number; seconds: number }>("buffer_budget", { seconds: draft.bufferSeconds, bitrateMbps: draft.bitrateMbps })
+      .then((value) => { if (alive) setBudget(value); }).catch(() => {});
+    return () => { alive = false; };
+  }, [draft?.bufferStorage, draft?.bufferSeconds, draft?.bitrateMbps]);
 
   // A mikrofonlista a futó motortól jön; ffmpeg nélkül a lemezes puffer nem választható
   useEffect(() => {
@@ -102,6 +111,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
     try {
       const warning = await invoke<string | null>("save_settings", { settings: normalize(draft) });
       const fresh = await invoke<Settings>("get_settings");
+      await loadLocale();
       onSaved(fresh);
       setDraft(fresh);
       setMessage(warning ? { text: warning, tone: "error" } : { text: t("settings.saved"), tone: "ok" });
@@ -175,14 +185,17 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
       <form className="mx-auto flex w-full max-w-[800px] flex-col gap-7" autoComplete="off" onSubmit={submit}>
         <Card title={t("settings.capture.title")}>
           <Row label={t("settings.outputDir.label")} hints={[t("settings.outputDir.hint")]}>
-            <TextInput wide value={draft.outputDir} onChange={(e) => set("outputDir", e.target.value)} />
+            <TextInput wide readOnly aria-label={t("settings.outputDir.label")} value={draft.outputDir} />
             <Button onClick={() => pickFolder("outputDir")}>{t("settings.browse")}</Button>
           </Row>
           <Row label={t("settings.buffer.label")} hints={[t("settings.buffer.hint")]}>
-            <Range min={30} max={600} step={10} value={buffer} onChange={(e) => set("bufferSeconds", Number(e.target.value))} />
+            <Range min={10} max={1200} step={10} value={buffer} onChange={(e) => set("bufferSeconds", Number(e.target.value))} />
             <Value>{formatDuration(buffer)}</Value>
           </Row>
-          <Row label={t("settings.storage.label")} hints={[t("settings.storage.hint", { size: clipSize })]}>
+          <Row label={t("settings.storage.label")} hints={[
+            t("settings.storage.hint", { size: clipSize }),
+            draft.bufferStorage === "memory" && budget && t("settings.memoryBudget", { size: budget.maxMb, duration: formatDuration(budget.seconds) }),
+          ]}>
             <Select value={draft.bufferStorage} onChange={(e) => set("bufferStorage", e.target.value as Settings["bufferStorage"])}>
               <option value="memory">{t("settings.storage.memory")}</option>
               <option value="disk" disabled={!diskAvailable}>
@@ -203,7 +216,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
                 }),
               }]}
             >
-              <TextInput wide value={draft.bufferDir} onChange={(e) => set("bufferDir", e.target.value)} />
+              <TextInput wide readOnly aria-label={t("settings.bufferDir.label")} value={draft.bufferDir} />
               <Button onClick={() => pickFolder("bufferDir")}>{t("settings.browse")}</Button>
             </Row>
           )}
@@ -273,6 +286,12 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
         </Card>
 
         <Card title={t("settings.system.title")}>
+          <Row label={t("settings.language.label")} hints={[t("settings.language.hint")]}>
+            <Select aria-label={t("settings.language.label")} value={draft.language} onChange={(e) => set("language", e.target.value as Settings["language"])}>
+              <option value="hu">Magyar</option>
+              <option value="en-US">English US</option>
+            </Select>
+          </Row>
           {systemSwitches.map(([field, label, hint]) => (
             <Row key={field} label={t(label)} hints={[hint && t(hint)]}>
               <Switch checked={draft[field] as boolean} onChange={(e) => set(field, e.target.checked)} />
@@ -280,7 +299,19 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
           ))}
         </Card>
 
-        {update && <UpdateCard update={update} />}
+        <Card title={t("settings.info.title")}>
+          {update && <UpdateRow update={update} />}
+          <Row label={t("settings.info.license")} hints={[t("settings.info.licensePending")]}>
+            <Button onClick={() => invoke("open_project_link", { target: "license" }).catch((e) => setMessage({ text: String(e), tone: "error" }))}>
+              {t("settings.info.license")}
+            </Button>
+          </Row>
+          <Row label="GitHub" hints={["catninth/clipcat"]}>
+            <Button aria-label={t("settings.info.repository")} title={t("settings.info.repository")} onClick={() => invoke("open_project_link", { target: "repository" }).catch((e) => setMessage({ text: String(e), tone: "error" }))}>
+              <GithubIcon className="size-5" aria-hidden="true" />
+            </Button>
+          </Row>
+        </Card>
 
         {/* Lebegő, áttetsző mentés sáv: csak akkor látszik, ha változott valami (vagy épp üzenetet mutat) */}
         {(dirty || saving || message) && (
@@ -323,7 +354,7 @@ function SettingsFrame({ children }: { children?: ReactNode }) {
   );
 }
 
-function UpdateCard({ update }: { update: UpdateState }) {
+function UpdateRow({ update }: { update: UpdateState }) {
   const installable = isInstallable(update);
   const working = update.phase === "downloading" || update.phase === "installing";
   const phaseText: Partial<Record<UpdateState["phase"], string | null>> = {
@@ -336,7 +367,6 @@ function UpdateCard({ update }: { update: UpdateState }) {
   if (update.phase === "available" && update.notes) hint += `\n${update.notes}`;
 
   return (
-    <Card title={t("settings.update.title")}>
       <Row
         label={t("settings.update.version", { version: update.current })}
         hints={[{ text: hint, tone: update.phase === "error" ? "error" : undefined, className: "whitespace-pre-line" }]}
@@ -350,7 +380,6 @@ function UpdateCard({ update }: { update: UpdateState }) {
           {t(installable ? "update.install" : "update.check")}
         </Button>
       </Row>
-    </Card>
   );
 }
 
@@ -365,15 +394,24 @@ function CaptureButton({ label, modifiersOnly, onCapture }: {
   const [capturing, setCapturing] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const flashTimer = useRef(0);
-  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => { clearTimeout(flashTimer.current); controller.current?.abort(); }, []);
 
   async function start(button: HTMLButtonElement) {
     if (isCapturing()) return;
     setCapturing(true);
-    const captured = await captureInput(button, modifiersOnly);
+    const abort = new AbortController();
+    controller.current = abort;
+    let captured: Captured | null;
+    try { captured = await captureInput(button, modifiersOnly, abort.signal); }
+    catch (error) { if (!abort.signal.aborted) setFlash(String(error)); captured = null; }
+    if (abort.signal.aborted) return;
     setCapturing(false);
     if (!captured) return;
-    const result = await onCapture(captured);
+    let result: Flash | void;
+    try { result = await onCapture(captured); }
+    catch (error) { if (!abort.signal.aborted) setFlash(String(error)); return; }
+    if (abort.signal.aborted) return;
     if (!result) return;
     clearTimeout(flashTimer.current);
     setFlash(result.text);

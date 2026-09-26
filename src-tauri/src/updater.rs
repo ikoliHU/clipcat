@@ -95,6 +95,7 @@ pub async fn check(app: &AppHandle) -> Result<UpdateState, String> {
     let handle = app.clone();
     let result = async {
         app.updater_builder()
+            .timeout(Duration::from_secs(120))
             // Windowson a telepítő indítása előtt: a telepítő a futó motor fájljait is cseréli
             .on_before_exit(move || crate::stop_engine(&handle))
             .build()
@@ -118,7 +119,12 @@ pub async fn check(app: &AppHandle) -> Result<UpdateState, String> {
             let first = updater(app).announced.lock().unwrap().replace(version.clone()).as_deref() != Some(&version);
             if first {
                 logfile::write(&format!("Frissítés elérhető: v{version}"));
-                crate::show_toast(app, "ok", &t("toast.updateAvailable"), &tf("toast.updateHint", &[("version", &version)]));
+                crate::show_toast(
+                    app,
+                    "ok",
+                    &t("toast.updateAvailable"),
+                    &tf("toast.updateHint", &[("version", &version)]),
+                );
             }
         }
         Ok(None) => {
@@ -144,7 +150,7 @@ pub async fn check(app: &AppHandle) -> Result<UpdateState, String> {
 /// Letölti és telepíti a talált frissítést, majd újraindítja a ClipCat-et.
 pub async fn install(app: &AppHandle) -> Result<(), String> {
     let update = updater(app).update.lock().unwrap().clone().ok_or_else(|| t("update.none"))?;
-    if crate::state(app).status.lock().unwrap().recording {
+    if capture_busy(app) {
         return Err(t("update.recordingActive"));
     }
     {
@@ -180,6 +186,12 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         Err(e) => return Err(fail(app, &e.to_string())),
     };
 
+    // Recheck the actual engine after downloading. Recording may have started meanwhile.
+    // The same operation lock guards all capture starts and settings changes.
+    let st = crate::state(app);
+    begin_install(&st.operations, &st.installing, &st.quitting, || capture_busy(app)).map_err(|error| fail(app, &error))?;
+    drop(st);
+
     set(app, |s| {
         s.phase = Phase::Installing;
         s.progress = None;
@@ -191,6 +203,7 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
         .and_then(|r| r.map_err(|e| e.to_string()));
     if let Err(e) = installed {
+        crate::state(app).installing.store(false, std::sync::atomic::Ordering::SeqCst);
         return Err(fail(app, &e));
     }
 
@@ -198,6 +211,71 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     crate::stop_engine(app);
     tauri_plugin_single_instance::destroy(app);
     app.restart();
+}
+
+fn capture_busy(app: &AppHandle) -> bool {
+    let st = crate::state(app);
+    st.save_in_progress.load(std::sync::atomic::Ordering::SeqCst)
+        || st
+            .engine
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|e| e.recording_active() || e.saving())
+}
+
+fn begin_install(
+    operations: &Mutex<()>,
+    installing: &std::sync::atomic::AtomicBool,
+    quitting: &std::sync::atomic::AtomicBool,
+    capture_busy: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let _operation = operations.lock().unwrap();
+    if capture_busy() {
+        return Err(t("update.recordingActive"));
+    }
+    if quitting.load(Ordering::SeqCst) || installing.load(Ordering::SeqCst) {
+        return Err(t("update.busy"));
+    }
+    installing.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    #[test]
+    fn recording_started_during_download_prevents_install() {
+        let operations = Mutex::new(());
+        let installing = AtomicBool::new(false);
+        let quitting = AtomicBool::new(false);
+        let recording = AtomicBool::new(false);
+        assert!(!recording.load(Ordering::SeqCst)); // initial download check
+        recording.store(true, Ordering::SeqCst); // started while network was pending
+        assert!(begin_install(&operations, &installing, &quitting, || recording.load(Ordering::SeqCst)).is_err());
+        assert!(!installing.load(Ordering::SeqCst));
+    }
+    #[test]
+    fn final_install_gate_and_capture_start_cannot_both_succeed() {
+        for _ in 0..100 {
+            let state = Arc::new((Mutex::new(()), AtomicBool::new(false), AtomicBool::new(false)));
+            let capture_state = state.clone();
+            let capture = std::thread::spawn(move || {
+                let _lock = capture_state.0.lock().unwrap();
+                if !capture_state.1.load(Ordering::SeqCst) {
+                    capture_state.2.store(true, Ordering::SeqCst);
+                }
+            });
+            let _ = begin_install(&state.0, &state.1, &AtomicBool::new(false), || state.2.load(Ordering::SeqCst));
+            capture.join().unwrap();
+            assert!(!(state.1.load(Ordering::SeqCst) && state.2.load(Ordering::SeqCst)));
+        }
+    }
 }
 
 fn fail(app: &AppHandle, error: &str) -> String {

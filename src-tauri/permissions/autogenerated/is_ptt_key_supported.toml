@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-is-ptt-key-supported"
+description = "Enables the is_ptt_key_supported command without any pre-configured scope."
+commands.allow = ["is_ptt_key_supported"]
+
+[[permission]]
+identifier = "deny-is-ptt-key-supported"
+description = "Denies the is_ptt_key_supported command without any pre-configured scope."
+commands.deny = ["is_ptt_key_supported"]

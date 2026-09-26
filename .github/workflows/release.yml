@@ -16,7 +16,7 @@ on:
     - cron: "0 3 * * *"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event_name }}-${{ github.ref }}
@@ -38,7 +38,7 @@ jobs:
       publish: ${{ steps.plan.outputs.publish }}
       skip: ${{ steps.plan.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Plan the release
         id: plan
         env:
@@ -86,22 +86,34 @@ jobs:
     if: needs.prepare.outputs.skip != 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
       # The capture engine (extracted OBS portable zip) version lives in bundle-obs.ps1
       - name: Cache capture engine
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: src-tauri/obs
-          key: obs-${{ hashFiles('bundle-obs.ps1') }}
-      - uses: actions/setup-node@v4
+          key: obs-${{ hashFiles('bundle-obs.ps1', 'scripts/bundle-lib.ps1') }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: '24.16.0'
           cache: npm
       - run: npm ci
+      - run: npm test
+      - name: Verify bundle and native regressions
+        shell: pwsh
+        run: |
+          ./tests/bundle.test.ps1
+          ./bundle-obs.ps1
+          node tests/recording-crash.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build NSIS installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -130,7 +142,7 @@ jobs:
           }
           $entry | ConvertTo-Json -Depth 5 |
             Out-File 'src-tauri\target\release\bundle\nsis\platform.json' -Encoding utf8NoBOM
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: clipcat-windows
           if-no-files-found: error
@@ -146,22 +158,27 @@ jobs:
     # minimum supported baseline, so bumping it is a compatibility decision.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Tauri Linux prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential curl file libayatana-appindicator3-dev librsvg2-dev \
             libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf wget
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: '24.16.0'
           cache: npm
       - run: npm ci
+      - run: npm test
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+      - run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --test glib_backport
       - name: Build AppImage, deb, and rpm
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -211,7 +228,7 @@ jobs:
               "linux-x86_64-rpm": $rpm
             }' > "$bundle/platform.json"
           cat "$bundle/platform.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: clipcat-linux
           if-no-files-found: error
@@ -225,11 +242,13 @@ jobs:
             src-tauri/target/release/bundle/platform.json
 
   publish:
+    permissions:
+      contents: write
     needs: [prepare, build-windows, build-linux]
     if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
       - name: Build updater manifest

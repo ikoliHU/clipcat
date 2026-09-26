@@ -1,7 +1,6 @@
 {
   "nav.gallery": "Galéria",
   "nav.settings": "Beállítások",
-
   "status.connecting": "Kapcsolódás…",
   "status.replayToggleTitle": "Visszajátszás be/ki",
   "status.replayRunning": "Visszajátszás fut",
@@ -14,12 +13,10 @@
   "status.replayStopped": "Visszajátszás áll",
   "status.restarting": "Újraindítás folyamatban…",
   "status.buffer": "Puffer: {filled} / {total}",
-
   "actions.saveNow": "Mentés most",
   "actions.record": "Felvétel",
   "actions.stopRecord": "Leállítás · {time}",
   "actions.openFolder": "Mappa megnyitása",
-
   "gallery.title": "Galéria",
   "gallery.refresh": "Frissítés",
   "gallery.all": "Mind",
@@ -27,13 +24,11 @@
   "gallery.count": "{count} klip",
   "gallery.emptyTitle": "Még nincs klip",
   "gallery.emptyHint": "Játék közben nyomd meg a(z) {hotkey} kombinációt.",
-
   "player.reveal": "Megnyitás mappában",
   "player.openExternal": "Lejátszóban",
   "player.delete": "Törlés",
   "player.deleteConfirm": "Biztosan törlöd?",
   "player.close": "Bezárás",
-
   "hotkey.none": "nincs",
   "hotkey.capturePrompt": "Nyomd meg… (Esc: mégse)",
   "hotkey.needModifier": "Kell mellé Ctrl/Alt/Shift",
@@ -41,7 +36,6 @@
   "mouse.middle": "Középső egérgomb",
   "mouse.x1": "Egér 4",
   "mouse.x2": "Egér 5",
-
   "settings.title": "Beállítások",
   "settings.capture.title": "Rögzítés",
   "settings.outputDir.label": "Mentési mappa",
@@ -55,7 +49,7 @@
   "settings.storage.disk": "Lemez",
   "settings.storage.diskMissing": "Lemez - nem elérhető (hiányzik az ffmpeg)",
   "settings.bufferDir.label": "Puffer mappája",
-  "settings.bufferDir.hint": "Játék közben folyamatosan ír: kb. {hour} GB óránként, napi {daily} óra játékkal évente kb. {year} TB. Ez egy átlagos 1 TB-os SSD tanúsított írási keretének (600 TBW) kb. {percent}%-a évente.",
+  "settings.bufferDir.hint": "Rögzítés közben folyamatosan ír: kb. {hour} GB óránként, napi {daily} órával évente kb. {year} TB. A tényleges írástűrés az SSD típusától függ.",
   "settings.resolution.label": "Felbontás",
   "settings.resolution.native": "A monitor natív felbontása",
   "settings.fps.label": "Képkockasebesség",
@@ -85,6 +79,12 @@
   "settings.hotkeyOpenFolder.hint": "Ha még nem volt mentés, a mentési mappát nyitja meg.",
   "settings.hotkeyGallery.label": "Galéria megnyitása",
   "settings.system.title": "Értesítések és rendszer",
+  "settings.language.label": "Nyelv",
+  "settings.language.hint": "Kezdetben a Windows megjelenítési nyelve; nem támogatott nyelvnél English US. A változás mentés után érvényes.",
+  "settings.info.title": "Infó",
+  "settings.info.license": "Licenc",
+  "settings.info.licensePending": "A licenc később kerül közzétételre a repóban.",
+  "settings.info.repository": "GitHub-repository megnyitása",
   "settings.showNotification.label": "Értesítés mentéskor",
   "settings.showNotification.hint": "A képernyő jobb felső sarkában, a játék fölött.",
   "settings.notificationSound.label": "Hangjelzés mentéskor",
@@ -97,7 +97,6 @@
   "settings.save": "Mentés",
   "settings.saving": "Mentés…",
   "settings.saved": "Elmentve.",
-
   "toast.windowTitle": "ClipCat értesítés",
   "toast.captureNotStarted": "A rögzítés nem indult",
   "toast.captureStopped": "A rögzítés leállt",
@@ -117,7 +116,6 @@
   "toast.hotkey": "Gyorsbillentyű",
   "toast.updateAvailable": "Frissítés elérhető",
   "toast.updateHint": "ClipCat v{version} - telepítés a ClipCat ablakából",
-
   "tray.starting": "ClipCat - indul…",
   "tray.recording": "ClipCat - felvétel fut ({hotkey}: leállítás)",
   "tray.replayActive": "ClipCat - visszajátszás aktív ({hotkey}: mentés)",
@@ -134,7 +132,6 @@
   "tray.lastClipFolder": "Legutóbbi klip mappája",
   "tray.settings": "Beállítások",
   "tray.quit": "Kilépés (felvétel leállítása)",
-
   "update.pill": "Frissítés: v{version}",
   "update.pillTitle": "A ClipCat v{version} letöltése és telepítése (a ClipCat újraindul)",
   "update.downloading": "Letöltés…",
@@ -148,14 +145,12 @@
   "update.install": "Telepítés és újraindítás",
   "update.none": "Nincs telepíthető frissítés.",
   "update.busy": "Egy frissítési művelet már folyamatban van.",
-  "update.recordingActive": "Felvétel közben nem lehet frissíteni. Előbb állítsd le a felvételt.",
+  "update.recordingActive": "Felvétel vagy klipmentés közben nem lehet frissíteni. Előbb fejezd be a felvételt vagy a mentést.",
   "update.failed": "A frissítés nem sikerült: {error}",
-
   "action.save": "Mentés",
   "action.record": "Felvétel",
   "action.openFolder": "Mappa megnyitása",
   "action.gallery": "Galéria",
-
   "error.engineMissing": "Hiányzik a rögzítőmotor",
   "error.engineNotRunning": "A rögzítőmotor nem fut",
   "error.hotkeyInvalid": "Érvénytelen gyorsbillentyű ({action}): {hotkey}",
@@ -166,8 +161,8 @@
   "error.clipDelete": "A klip nem törölhető (lehet, hogy épp lejátszod).",
   "error.settingsSave": "A beállítások nem menthetők: {error}",
   "error.autostart": "Az automatikus indítás nem állítható: {error}",
-
   "validate.outputDir": "Add meg a mentési mappát.",
+  "validate.language": "Nem támogatott nyelv.",
   "validate.buffer": "A visszajátszás hossza {min} és {max} másodperc között lehet.",
   "validate.bufferStorage": "Érvénytelen puffertárolás.",
   "validate.bufferDir": "Add meg a puffer mappáját.",
@@ -179,7 +174,6 @@
   "validate.resolution": "Érvénytelen felbontás.",
   "validate.micDevice": "Válassz mikrofont.",
   "validate.pttKey": "Ez a gomb nem használható push-to-talkra.",
-
   "engine.missingFunction": "Hiányzó libobs függvény: {name} ({error})",
   "engine.notInstalled": "Hiányzik a rögzítőmotor: telepítsd újra a ClipCat-et.",
   "engine.notInstalledSystem": "Hiányzik az OBS Studio: telepítsd a csomagkezelővel (obs-studio).",
@@ -204,5 +198,19 @@
   "engine.ffmpegFailed": "A klip összefűzése nem sikerült: {detail}",
   "engine.recordingRunning": "A felvétel már fut.",
   "engine.recordingCreate": "A felvétel nem hozható létre.",
-  "engine.recordingStart": "A felvétel nem indítható. {detail}"
+  "engine.recordingStart": "A felvétel nem indítható. {detail}",
+  "engine.diskFull": "Kevés a szabad hely. A rögzítés leállt; legalább 1 GB szabad hely szükséges.",
+  "engine.diskSpaceUnknown": "A szabad tárhely nem ellenőrizhető: {error}",
+  "engine.memoryLow": "Nincs elég szabad memória a biztonságos puffereléshez.",
+  "engine.settingsBusy": "Felvétel vagy klipmentés közben a rögzítési beállítások nem módosíthatók.",
+  "engine.recordingFinalize": "A felvétel lezárása nem sikerült. A részleges fájl megmaradt: {path}",
+  "engine.bufferQuota": "A lemezes puffer elérte a méretkorlátot. Ellenőrizd a tárhelyet és a mappa jogosultságait.",
+  "engine.saveCancelled": "A klipmentés megszakadt.",
+  "settings.memoryBudget": "Biztonságos RAM-keret: {size} MiB; elérhető pufferidő: {duration}.",
+  "status.encoder": "Kódoló: {name}",
+  "status.cpuEncoder": "CPU-s kódolás; játék közben nagyobb terhelés.",
+  "gallery.previous": "Előző",
+  "gallery.next": "Következő",
+  "gallery.page": "{current} / {total} oldal",
+  "validate.pickFolder": "Mappaváltáshoz használd a Tallózás gombot."
 }

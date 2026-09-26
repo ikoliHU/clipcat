@@ -11,3 +11,7 @@ dist/
 # Frontend
 node_modules/
 ui-dist/
+
+# Local UI verification artifacts
+output/playwright/
+.playwright-cli/

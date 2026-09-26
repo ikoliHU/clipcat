@@ -34,6 +34,8 @@ const listeners = new Map<string, Set<Listener>>();
 const jobs = new Map<Element, Job>();
 const queue = new Set<Job>(); // előnézetre váró, látható csempék
 let active = 0;
+let validKeys: Set<string> | null = null;
+const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 
 const db = new Promise<IDBDatabase>((resolve, reject) => {
   const req = indexedDB.open("clipcat", 1);
@@ -51,15 +53,36 @@ function store(mode: IDBTransactionMode, action: (store: IDBObjectStore) => void
   }));
 }
 
-// Indításkor egyszer beolvassa a tárolt előnézeteket; ha az IndexedDB nem elérhető, csak memóriában gyorsítótáraz
-export const thumbsReady = store("readonly", (s) => {
-  s.openCursor().onsuccess = (e) => {
-    const cursor = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
-    if (!cursor) return;
-    cache.set(cursor.key as string, cursor.value as Stored);
-    cursor.continue();
-  };
-}).catch(() => {});
+// Persisted JPEGs load only when their tile becomes visible.
+export const thumbsReady = db.then(() => {}).catch(() => {});
+
+async function storedThumb(key: string): Promise<Stored | undefined> {
+  try {
+    const database = await db;
+    return await new Promise((resolve, reject) => {
+      const request = database.transaction("thumbs", "readonly").objectStore("thumbs").get(key);
+      request.onsuccess = () => resolve(request.result as Stored | undefined);
+      request.onerror = () => reject(request.error);
+    });
+  } catch { return undefined; }
+}
+
+function evict(key: string) {
+  cache.delete(key);
+  const url = urls.get(key);
+  if (url) URL.revokeObjectURL(url);
+  urls.delete(key);
+}
+
+function trimCache() {
+  let bytes = [...cache.values()].reduce((total, value) => total + value.blob.size, 0);
+  for (const [key, value] of cache) {
+    if (bytes <= MAX_CACHE_BYTES) break;
+    if (listeners.get(key)?.size) continue;
+    bytes -= value.blob.size;
+    evict(key);
+  }
+}
 
 export function getThumb(key: string): Thumb | undefined {
   const stored = cache.get(key);
@@ -74,15 +97,19 @@ export function getThumb(key: string): Thumb | undefined {
 
 // A már nem létező klipek képét és tárolt előnézetét elengedi
 export function pruneThumbs(keep: Set<string>) {
-  const stale = [...cache.keys()].filter((key) => !keep.has(key));
-  if (!stale.length) return;
-  for (const key of stale) {
-    cache.delete(key);
-    const url = urls.get(key);
-    if (url) URL.revokeObjectURL(url);
-    urls.delete(key);
-  }
-  store("readwrite", (s) => stale.forEach((key) => s.delete(key))).catch(() => {});
+  validKeys = keep;
+  for (const key of cache.keys()) if (!keep.has(key)) evict(key);
+  for (const key of failed) if (!keep.has(key)) failed.delete(key);
+  for (const key of listeners.keys()) if (!keep.has(key)) listeners.delete(key);
+  for (const [el, job] of jobs) if (!keep.has(job.key)) forget(el);
+  store("readwrite", (store) => {
+    store.openKeyCursor().onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursor | null>).result;
+      if (!cursor) return;
+      if (!keep.has(String(cursor.key))) store.delete(cursor.key);
+      cursor.continue();
+    };
+  }).catch(() => {});
 }
 
 // Egy rejtett videóból kivesz egy képkockát; minden ágon elengedi a videót
@@ -107,7 +134,7 @@ function capture(path: string): Promise<Stored> {
       if (!video.videoWidth) return finish(new Error("no video track"));
       const canvas = document.createElement("canvas");
       canvas.width = THUMB_WIDTH;
-      canvas.height = Math.round((THUMB_WIDTH * video.videoHeight) / video.videoWidth);
+      canvas.height = Math.min(1080, Math.max(1, Math.round((THUMB_WIDTH * video.videoHeight) / video.videoWidth)));
       canvas.getContext("2d")!.drawImage(video, 0, 0, canvas.width, canvas.height);
       const duration = video.duration;
       canvas.toBlob((blob) => (blob ? finish(null, { blob, duration }) : finish(new Error("encode failed"))), "image/jpeg", 0.8);
@@ -129,17 +156,18 @@ function capture(path: string): Promise<Stored> {
 async function generate({ key, path }: Job) {
   inFlight.add(key);
   try {
-    const stored = await capture(path);
+    const stored = await storedThumb(key) ?? await capture(path);
+    if (validKeys && !validKeys.has(key)) return;
     cache.set(key, stored);
+    trimCache();
     const thumb = getThumb(key)!;
     listeners.get(key)?.forEach((notify) => notify(thumb));
     store("readwrite", (s) => s.put(stored, key)).catch(() => {});
   } catch (e) {
-    failed.add(key);
+    if (!validKeys || validKeys.has(key)) failed.add(key);
     console.warn("thumbnail failed", path, e);
   } finally {
     inFlight.delete(key);
-    listeners.delete(key);
   }
 }
 
@@ -175,15 +203,19 @@ const observer = new IntersectionObserver((entries) => {
 
 // Előnézetet kér a csempéhez, amint a képernyő közelébe kerül; a visszaadott függvény lemondja
 export function requestThumb(key: string, path: string, el: Element, notify: Listener): () => void {
-  if (cache.has(key) || failed.has(key)) return () => {};
+  if (failed.has(key)) return () => {};
   if (!listeners.has(key)) listeners.set(key, new Set());
   listeners.get(key)!.add(notify);
-  if (!inFlight.has(key)) {
+  const cached = getThumb(key);
+  if (cached) notify(cached);
+  else if (!inFlight.has(key)) {
     jobs.set(el, { key, path, el });
     observer.observe(el);
   }
   return () => {
     listeners.get(key)?.delete(notify);
+    if (!listeners.get(key)?.size) listeners.delete(key);
     forget(el);
+    trimCache();
   };
 }

@@ -78,7 +78,12 @@ pub struct Calldata {
 
 impl Calldata {
     fn new() -> Self {
-        Self { stack: null_mut(), size: 0, capacity: 0, fixed: false }
+        Self {
+            stack: null_mut(),
+            size: 0,
+            capacity: 0,
+            fixed: false,
+        }
     }
 }
 
@@ -92,6 +97,13 @@ macro_rules! obs_api {
         struct Api { $($name: unsafe extern "C" fn($($arg),*) $(-> $ret)?,)* }
 
         impl Api {
+            #[cfg(test)]
+            fn fake() -> Self {
+                Self { $($name: {
+                    unsafe extern "C" fn stub($(_: $arg),*) $(-> $ret)? { Default::default() }
+                    stub
+                },)* }
+            }
             unsafe fn load(lib: &libloading::Library) -> Result<Self, String> {
                 Ok(Self { $($name: *lib
                     .get::<unsafe extern "C" fn($($arg),*) $(-> $ret)?>(concat!(stringify!($name), "\0").as_bytes())
@@ -135,6 +147,8 @@ obs_api! {
     obs_sceneitem_set_visible: fn(Ptr, bool) -> bool;
     obs_video_encoder_create: fn(*const c_char, *const c_char, Ptr, Ptr) -> Ptr;
     obs_audio_encoder_create: fn(*const c_char, *const c_char, Ptr, usize, Ptr) -> Ptr;
+    obs_enum_encoder_types: fn(usize, *mut *const c_char) -> bool;
+    obs_enum_input_types: fn(usize, *mut *const c_char) -> bool;
     obs_encoder_set_video: fn(Ptr, Ptr);
     obs_encoder_set_audio: fn(Ptr, Ptr);
     obs_encoder_release: fn(Ptr);
@@ -145,6 +159,7 @@ obs_api! {
     obs_output_set_audio_encoder: fn(Ptr, Ptr, usize);
     obs_output_start: fn(Ptr) -> bool;
     obs_output_stop: fn(Ptr);
+    obs_output_force_stop: fn(Ptr);
     obs_output_active: fn(Ptr) -> bool;
     obs_output_get_last_error: fn(Ptr) -> *const c_char;
     obs_output_get_proc_handler: fn(Ptr) -> Ptr;
@@ -181,7 +196,10 @@ static API: OnceLock<Api> = OnceLock::new();
 static EVENTS: OnceLock<Box<dyn Fn(Event) + Send + Sync>> = OnceLock::new();
 /// A jelzés-visszahívásokból is el kell érni az aktuális kimenetet és a mikrofont.
 static CURRENT_OUTPUT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static MIC_SOURCE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static MIC_SOURCE: Mutex<usize> = Mutex::new(0);
+static MIC_MUTED: AtomicBool = AtomicBool::new(true);
+static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
+static RECORD_STOP_CODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 // A rejtett forrás nem dolgozik (a monitorrögzítés elengedi a duplikációt, a játékrögzítés
 // lecsatlakozik), ezért csak akkor látható, ha a képére szükség van. A jelzések más szálról
@@ -257,7 +275,10 @@ pub(crate) struct Layout {
 
 impl Layout {
     fn module(&self, name: &str) -> (PathBuf, PathBuf) {
-        (self.plugins.join(format!("{name}{}", std::env::consts::DLL_SUFFIX)), self.plugin_data.join(name))
+        (
+            self.plugins.join(format!("{name}{}", std::env::consts::DLL_SUFFIX)),
+            self.plugin_data.join(name),
+        )
     }
 }
 
@@ -291,6 +312,7 @@ unsafe extern "C" fn log_handler(level: c_int, format: *const c_char, args: Ptr,
 unsafe extern "C" fn on_saved(_data: Ptr, _cd: *mut Calldata) {
     let output = CURRENT_OUTPUT.load(Ordering::SeqCst);
     let path = API.get().and_then(|api| last_replay(api, output));
+    SAVE_PENDING.store(false, Ordering::SeqCst);
     emit(Event::Saved(path));
 }
 
@@ -318,6 +340,7 @@ unsafe extern "C" fn on_stop(_data: Ptr, cd: *mut Calldata) {
 unsafe extern "C" fn on_record_stop(_data: Ptr, cd: *mut Calldata) {
     let Some(api) = API.get() else { return };
     let code = stop_code(api, cd);
+    RECORD_STOP_CODE.store(code, Ordering::SeqCst);
     if code != 0 {
         RECORDING_WANTED.store(false, Ordering::SeqCst);
         std::thread::spawn(refresh_visibility);
@@ -327,16 +350,25 @@ unsafe extern "C" fn on_record_stop(_data: Ptr, cd: *mut Calldata) {
 
 unsafe fn last_error(api: &Api, output: Ptr) -> String {
     let err = (api.obs_output_get_last_error)(output);
-    if err.is_null() { String::new() } else { CStr::from_ptr(err).to_string_lossy().into_owned() }
+    if err.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(err).to_string_lossy().into_owned()
+    }
 }
 
 /// Leállítja a kimenetet, és megvárja, amíg a libobs lezárja (legfeljebb `timeout` ideig).
-unsafe fn stop_output(api: &Api, output: Ptr, timeout: Duration) {
+unsafe fn stop_output(api: &Api, output: Ptr, timeout: Duration) -> bool {
     (api.obs_output_stop)(output);
     let deadline = Instant::now() + timeout;
     while (api.obs_output_active)(output) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
+    let finished = !(api.obs_output_active)(output);
+    if !finished {
+        (api.obs_output_force_stop)(output);
+    }
+    finished
 }
 
 fn now_ms() -> u64 {
@@ -362,10 +394,12 @@ unsafe fn last_replay(api: &Api, output: Ptr) -> Option<String> {
 
 /// Mikrofon némítása (push-to-talk); hamis, ha a motor még nem fut.
 pub fn set_mic_muted(muted: bool) -> bool {
-    let mic = MIC_SOURCE.load(Ordering::SeqCst);
+    MIC_MUTED.store(muted, Ordering::SeqCst);
+    // Keep this lock through the FFI call; shutdown takes it before releasing the source.
+    let mic = MIC_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
     match API.get() {
-        Some(api) if !mic.is_null() => {
-            unsafe { (api.obs_source_set_muted)(mic, muted) };
+        Some(api) if *mic != 0 => {
+            unsafe { (api.obs_source_set_muted)(*mic as Ptr, muted) };
             true
         }
         _ => false,
@@ -397,7 +431,10 @@ struct Data<'a> {
 
 impl<'a> Data<'a> {
     fn new(api: &'a Api) -> Self {
-        Self { api, ptr: unsafe { (api.obs_data_create)() } }
+        Self {
+            api,
+            ptr: unsafe { (api.obs_data_create)() },
+        }
     }
     fn str(self, key: &str, value: &str) -> Self {
         unsafe { (self.api.obs_data_set_string)(self.ptr, cs(key).as_ptr(), cs(value).as_ptr()) };
@@ -433,6 +470,7 @@ pub struct Config {
     pub capture_desktop: bool,
     pub monitor_id: String,
     pub mic_device: String,
+    pub mic_enabled: bool,
 }
 
 pub struct Engine {
@@ -455,12 +493,161 @@ pub struct Engine {
     record_output: Ptr,
     record_path: String,
     record_since: u64,
+    save_worker: Option<std::thread::JoinHandle<()>>,
+    encoder_index: usize,
+    encoder_name: String,
+    buffer_seconds: u32,
+    memory_buffer_bytes: u64,
+    initialized: bool,
 }
 
 // A libobs objektumai szálbiztosak; az Engine-t Mutex védi.
 unsafe impl Send for Engine {}
 
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+fn registered(enumerate: unsafe extern "C" fn(usize, *mut *const c_char) -> bool, wanted: &str) -> bool {
+    let mut index = 0;
+    let mut id = std::ptr::null();
+    while unsafe { enumerate(index, &mut id) } {
+        if !id.is_null() && unsafe { CStr::from_ptr(id) }.to_bytes() == wanted.as_bytes() {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
 impl Engine {
+    pub fn saving(&self) -> bool {
+        SAVE_PENDING.load(Ordering::SeqCst)
+    }
+    pub fn encoder_name(&self) -> &str {
+        &self.encoder_name
+    }
+    pub fn effective_buffer_seconds(&self) -> u32 {
+        self.buffer_seconds
+    }
+
+    fn finish_pending_save(&mut self) {
+        if let Some(worker) = self.save_worker.take() {
+            let _ = worker.join();
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.saving() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        SAVE_PENDING.store(false, Ordering::SeqCst);
+    }
+
+    fn try_next_encoder(&mut self) -> bool {
+        if self.recording_active() || self.replay_active() {
+            return false;
+        }
+        let next = self.create_video_encoder();
+        if next.is_null() {
+            return false;
+        }
+        unsafe {
+            (self.api.obs_encoder_set_video)(next, (self.api.obs_get_video)());
+            if !self.output.is_null() {
+                (self.api.obs_output_set_video_encoder)(self.output, next);
+            }
+            if !self.record_output.is_null() {
+                (self.api.obs_output_set_video_encoder)(self.record_output, next);
+            }
+            if !self.video_encoder.is_null() {
+                (self.api.obs_encoder_release)(self.video_encoder);
+            }
+        }
+        self.video_encoder = next;
+        true
+    }
+
+    /// WASAPI/Pulse sources open devices when created; muting alone does not release them.
+    fn sync_audio(&mut self) -> Result<(), String> {
+        let capturing = REPLAY_WANTED.load(Ordering::SeqCst) || RECORDING_WANTED.load(Ordering::SeqCst);
+        let api = self.api;
+        if capturing && self.desktop_audio.is_null() {
+            self.desktop_audio = self.create_source(
+                sys::DESKTOP_AUDIO_SOURCE,
+                "Desktop audio",
+                Data::new(api).str("device_id", "default"),
+            );
+            if self.desktop_audio.is_null() {
+                return Err(tf("engine.sourceCreate", &[("id", &sys::DESKTOP_AUDIO_SOURCE)]));
+            }
+            unsafe {
+                (api.obs_source_set_audio_mixers)(self.desktop_audio, 1);
+                (api.obs_set_output_source)(CHANNEL_DESKTOP_AUDIO, self.desktop_audio);
+            }
+        } else if !capturing && !self.desktop_audio.is_null() {
+            unsafe {
+                (api.obs_set_output_source)(CHANNEL_DESKTOP_AUDIO, null_mut());
+                (api.obs_source_release)(self.desktop_audio);
+            }
+            self.desktop_audio = null_mut();
+        }
+        let mut mic = MIC_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
+        if capturing && self.config.mic_enabled && self.mic.is_null() {
+            self.mic = self.create_source(
+                sys::MIC_SOURCE,
+                "Microphone",
+                Data::new(api).str("device_id", &self.config.mic_device),
+            );
+            if self.mic.is_null() {
+                return Err(tf("engine.sourceCreate", &[("id", &sys::MIC_SOURCE)]));
+            }
+            unsafe {
+                (api.obs_source_set_audio_mixers)(self.mic, 1);
+                (api.obs_source_set_muted)(self.mic, MIC_MUTED.load(Ordering::SeqCst));
+                (api.obs_set_output_source)(CHANNEL_MIC, self.mic);
+            }
+            *mic = self.mic as usize;
+        } else if (!capturing || !self.config.mic_enabled) && !self.mic.is_null() {
+            *mic = 0;
+            unsafe {
+                (api.obs_set_output_source)(CHANNEL_MIC, null_mut());
+                (api.obs_source_release)(self.mic);
+            }
+            self.mic = null_mut();
+        }
+        Ok(())
+    }
+
+    pub fn set_mic_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        self.config.mic_enabled = enabled;
+        self.sync_audio()
+    }
+
+    pub fn check_resources(&mut self) -> Result<(), String> {
+        // A spontaneous muxer failure also closes idle audio devices on the next tick.
+        self.sync_audio()?;
+        let result = if self.recording_active() {
+            crate::resources::require_space(Path::new(&self.config.output_dir), crate::resources::MIN_FREE_BYTES)
+        } else {
+            Ok(())
+        }
+        .and_then(|_| {
+            if self.replay_active() && self.config.buffer_dir.is_some() {
+                disk::health()
+            } else {
+                Ok(())
+            }
+        });
+        if result.is_err() {
+            disk::cancel_save();
+            self.stop_replay();
+            let _ = self.stop_recording();
+            set_replay_wanted(false);
+            let _ = self.sync_audio();
+        }
+        result
+    }
     /// Elindítja a libobs-t; folyamatonként egyszer hívható.
     /// `replay`: induljon-e rögtön a visszajátszási puffer.
     pub fn start(config: &Config, replay: bool) -> Result<Engine, String> {
@@ -470,17 +657,6 @@ impl Engine {
             if !(api.obs_startup)(c"en-US".as_ptr(), cs(&plugin_config).as_ptr(), null_mut()) {
                 return Err(t("engine.startup"));
             }
-            let version = CStr::from_ptr((api.obs_get_version_string)()).to_string_lossy();
-            logfile::write(&format!("libobs {version} elindult"));
-            (api.obs_add_data_path)(cs(&format!("{}/", forward(&layout.data))).as_ptr());
-
-            let audio = AudioInfo { samples_per_sec: 48000, speakers: SPEAKERS_STEREO };
-            if !(api.obs_reset_audio)(&audio) {
-                return Err(t("engine.audioInit"));
-            }
-            reset_video(api, config)?;
-            load_modules(api, &layout)?;
-            (api.obs_post_load_modules)();
         }
 
         let mut engine = Engine {
@@ -500,13 +676,38 @@ impl Engine {
             record_output: null_mut(),
             record_path: String::new(),
             record_since: 0,
+            save_worker: None,
+            encoder_index: 0,
+            encoder_name: String::new(),
+            buffer_seconds: config.buffer_seconds,
+            memory_buffer_bytes: 0,
+            initialized: true,
         };
+        unsafe {
+            let version = CStr::from_ptr((api.obs_get_version_string)()).to_string_lossy();
+            logfile::write(&format!("libobs {version} elindult"));
+            (api.obs_add_data_path)(cs(&format!("{}/", forward(&layout.data))).as_ptr());
+
+            let audio = AudioInfo {
+                samples_per_sec: 48000,
+                speakers: SPEAKERS_STEREO,
+            };
+            if !(api.obs_reset_audio)(&audio) {
+                return Err(t("engine.audioInit"));
+            }
+            reset_video(api, config)?;
+            load_modules(api, &layout)?;
+            (api.obs_post_load_modules)();
+        }
         engine.create_sources()?;
         engine.build_pipeline()?;
         Ok(engine)
     }
 
     fn create_source(&self, id: &str, name: &str, settings: Data) -> Ptr {
+        if !registered(self.api.obs_enum_input_types, id) {
+            return null_mut();
+        }
         unsafe { (self.api.obs_source_create)(cs(id).as_ptr(), cs(name).as_ptr(), settings.ptr, null_mut()) }
     }
 
@@ -529,18 +730,23 @@ impl Engine {
         if let Some(id) = sys::GAME_SOURCE {
             self.game = required(self.create_source(id, "Játék", sys::game_settings(Data::new(api))), id)?;
         }
-        let desktop_audio = Data::new(api).str("device_id", "default");
-        self.desktop_audio =
-            required(self.create_source(sys::DESKTOP_AUDIO_SOURCE, "Asztali hang", desktop_audio), sys::DESKTOP_AUDIO_SOURCE)?;
-        let mic = Data::new(api).str("device_id", &self.config.mic_device);
-        self.mic = required(self.create_source(sys::MIC_SOURCE, "Mikrofon", mic), sys::MIC_SOURCE)?;
-
         unsafe {
             self.scene = (api.obs_scene_create)(c"Felvétel".as_ptr());
+            if self.scene.is_null() {
+                return Err(tf("engine.sourceCreate", &[("id", &"scene")]));
+            }
             // Hozzáadási sorrend = rétegek alulról felfelé: a játék takarja az asztalt
             self.display_item = (api.obs_scene_add)(self.scene, self.display);
-            let game_item = if self.game.is_null() { null_mut() } else { (api.obs_scene_add)(self.scene, self.game) };
-            let bounds = Vec2 { x: self.config.base.0 as f32, y: self.config.base.1 as f32, _pad: [0.0; 2] };
+            let game_item = if self.game.is_null() {
+                null_mut()
+            } else {
+                (api.obs_scene_add)(self.scene, self.game)
+            };
+            let bounds = Vec2 {
+                x: self.config.base.0 as f32,
+                y: self.config.base.1 as f32,
+                _pad: [0.0; 2],
+            };
             for item in [self.display_item, game_item] {
                 if !item.is_null() {
                     (api.obs_sceneitem_set_bounds_type)(item, OBS_BOUNDS_SCALE_INNER);
@@ -560,22 +766,23 @@ impl Engine {
             RECORDING_WANTED.store(false, Ordering::SeqCst);
             refresh_visibility();
 
-            (api.obs_source_set_audio_mixers)(self.desktop_audio, 1);
-            (api.obs_source_set_audio_mixers)(self.mic, 1);
-            (api.obs_source_set_muted)(self.mic, true);
             (api.obs_set_output_source)(CHANNEL_VIDEO, (api.obs_scene_get_source)(self.scene));
-            (api.obs_set_output_source)(CHANNEL_DESKTOP_AUDIO, self.desktop_audio);
-            (api.obs_set_output_source)(CHANNEL_MIC, self.mic);
         }
-        MIC_SOURCE.store(self.mic, Ordering::SeqCst);
+        self.sync_audio()?;
         Ok(())
     }
 
     /// Az első elérhető hardveres kódoló (NVENC, Linuxon VAAPI is), ennek hiányában x264.
-    fn create_video_encoder(&self) -> Ptr {
+    fn create_video_encoder(&mut self) -> Ptr {
         let api = self.api;
         let c = &self.config;
-        for &id in sys::hardware_encoders(c.hevc) {
+        let candidates: Vec<_> = sys::hardware_encoders(c.hevc).iter().copied().chain(["obs_x264"]).collect();
+        while self.encoder_index < candidates.len() {
+            let id = candidates[self.encoder_index];
+            self.encoder_index += 1;
+            if !registered(api.obs_enum_encoder_types, id) {
+                continue;
+            }
             let settings = if id.starts_with("obs_nvenc") {
                 Data::new(api)
                     .str("rate_control", "CBR")
@@ -594,6 +801,7 @@ impl Engine {
                     .bool("lookahead", false)
             } else {
                 Data::new(api)
+                    .str("preset", "veryfast")
                     .str("rate_control", "CBR")
                     .int("bitrate", c.bitrate_kbps as i64)
                     .int("keyint_sec", 2)
@@ -601,22 +809,24 @@ impl Engine {
             };
             let encoder = unsafe { (api.obs_video_encoder_create)(cs(id).as_ptr(), c"clipcat_video".as_ptr(), settings.ptr, null_mut()) };
             if !encoder.is_null() {
+                self.encoder_name = id.to_string();
                 logfile::write(&format!("Videókódoló: {id}"));
                 return encoder;
             }
         }
-        logfile::write("Nincs hardveres kódoló, x264 (processzoros) kódolás");
-        let x264 = Data::new(api)
-            .str("rate_control", "CBR")
-            .int("bitrate", c.bitrate_kbps as i64)
-            .int("keyint_sec", 2)
-            .str("preset", "veryfast");
-        unsafe { (api.obs_video_encoder_create)(c"obs_x264".as_ptr(), c"clipcat_video".as_ptr(), x264.ptr, null_mut()) }
+        null_mut()
     }
 
     fn build_pipeline(&mut self) -> Result<(), String> {
         let api = self.api;
         let c = self.config.clone();
+        self.encoder_index = 0;
+        let budget = crate::resources::memory_budget(c.buffer_seconds, c.bitrate_kbps, crate::resources::memory());
+        if c.buffer_dir.is_none() && budget.seconds < 10 {
+            return Err(t("engine.memoryLow"));
+        }
+        self.buffer_seconds = if c.buffer_dir.is_none() { budget.seconds } else { c.buffer_seconds };
+        self.memory_buffer_bytes = if c.buffer_dir.is_none() { budget.max_mb * 1024 * 1024 } else { 0 };
         let _ = std::fs::create_dir_all(&c.output_dir);
         unsafe {
             self.video_encoder = self.create_video_encoder();
@@ -626,7 +836,8 @@ impl Engine {
             (api.obs_encoder_set_video)(self.video_encoder, (api.obs_get_video)());
 
             let audio_settings = Data::new(api).int("bitrate", 192);
-            self.audio_encoder = (api.obs_audio_encoder_create)(c"ffmpeg_aac".as_ptr(), c"clipcat_audio".as_ptr(), audio_settings.ptr, 0, null_mut());
+            self.audio_encoder =
+                (api.obs_audio_encoder_create)(c"ffmpeg_aac".as_ptr(), c"clipcat_audio".as_ptr(), audio_settings.ptr, 0, null_mut());
             if self.audio_encoder.is_null() {
                 return Err(t("engine.audioEncoder"));
             }
@@ -634,7 +845,7 @@ impl Engine {
 
             self.output = match &c.buffer_dir {
                 Some(dir) => create_disk_output(api, Path::new(dir)),
-                None => create_memory_output(api, &c),
+                None => create_memory_output(api, &c, budget),
             };
             if self.output.is_null() {
                 return Err(t("engine.replayCreate"));
@@ -672,18 +883,22 @@ impl Engine {
         }
         if let Some(dir) = &self.config.buffer_dir {
             // Minden indítás új, üres darabsorral kezd
-            let first = disk::begin(Path::new(dir), self.config.buffer_seconds)?;
-            let settings = Data::new(api).str("path", &forward(&first));
+            let first = disk::begin(Path::new(dir), self.config.buffer_seconds, self.config.bitrate_kbps)?;
+            let settings = Data::new(api)
+                .str("path", &forward(&first))
+                .str("directory", &forward(first.parent().unwrap()));
             unsafe { (api.obs_output_update)(self.output, settings.ptr) };
         }
         unsafe {
             // Közvetlenül egy leállítás után a libobs még zárhatja az előző adatfolyamot
-            for _ in 0..25 {
+            loop {
                 if (api.obs_output_start)(self.output) {
                     self.buffer_since = now_ms();
                     return Ok(());
                 }
-                std::thread::sleep(Duration::from_millis(40));
+                if !self.try_next_encoder() {
+                    break;
+                }
             }
             let detail = last_error(api, self.output);
             if self.config.buffer_dir.is_some() {
@@ -694,6 +909,7 @@ impl Engine {
     }
 
     fn stop_replay(&mut self) {
+        self.finish_pending_save();
         if !self.output.is_null() {
             unsafe { stop_output(self.api, self.output, Duration::from_secs(5)) };
         }
@@ -705,16 +921,27 @@ impl Engine {
 
     /// A visszajátszási puffer ki-/bekapcsolása; a kézi felvételt nem érinti.
     pub fn set_replay_enabled(&mut self, enabled: bool) -> Result<(), String> {
-        self.replay_enabled = enabled;
+        if self.saving() {
+            return Err(t("engine.saveBusy"));
+        }
         if !enabled {
+            self.replay_enabled = false;
             self.stop_replay();
             set_replay_wanted(false);
-            Ok(())
+            self.sync_audio()
         } else if self.replay_active() {
+            self.replay_enabled = true;
             Ok(())
         } else {
             set_replay_wanted(true);
-            self.start_replay()
+            let result = self.sync_audio().and_then(|_| self.start_replay());
+            if result.is_err() {
+                set_replay_wanted(false);
+                let _ = self.sync_audio();
+            } else {
+                self.replay_enabled = true;
+            }
+            result
         }
     }
 
@@ -743,12 +970,24 @@ impl Engine {
             return Err(t("error.engineNotRunning"));
         }
         let api = self.api;
-        let settings = Data::new(api).str("path", &forward(path)).str("muxer_settings", "");
+        crate::resources::require_space(path.parent().unwrap_or(path), crate::resources::MIN_FREE_BYTES)?;
+        // Fragmented MP4 survives an interrupted process without a final moov rewrite.
+        let settings = Data::new(api).str("path", &forward(path)).str(
+            "muxer_settings",
+            "movflags=frag_keyframe+empty_moov+default_base_moof flush_packets=1",
+        );
         set_recording_wanted(true);
+        if let Err(error) = self.sync_audio() {
+            set_recording_wanted(false);
+            let _ = self.sync_audio();
+            return Err(error);
+        }
+        RECORD_STOP_CODE.store(0, Ordering::SeqCst);
         unsafe {
             let output = (api.obs_output_create)(c"ffmpeg_muxer".as_ptr(), c"clipcat_record".as_ptr(), settings.ptr, null_mut());
             if output.is_null() {
                 set_recording_wanted(false);
+                let _ = self.sync_audio();
                 return Err(t("engine.recordingCreate"));
             }
             (api.obs_output_set_video_encoder)(output, self.video_encoder);
@@ -756,10 +995,15 @@ impl Engine {
             let signals = (api.obs_output_get_signal_handler)(output);
             (api.signal_handler_connect)(signals, c"stop".as_ptr(), on_record_stop, null_mut());
             self.record_output = output;
-            if !(api.obs_output_start)(output) {
+            while !(api.obs_output_start)(output) {
+                if self.try_next_encoder() {
+                    (api.obs_output_set_video_encoder)(output, self.video_encoder);
+                    continue;
+                }
                 let detail = last_error(api, output);
                 self.release_record_output();
                 set_recording_wanted(false);
+                let _ = self.sync_audio();
                 return Err(tf("engine.recordingStart", &[("detail", &detail)]).trim().to_string());
             }
         }
@@ -770,17 +1014,22 @@ impl Engine {
     }
 
     /// Leállítja a kézi felvételt; a lezárt fájlról `Recorded` eseményt küld.
-    pub fn stop_recording(&mut self) {
+    pub fn stop_recording(&mut self) -> Result<(), String> {
         if !self.recording_active() {
-            return;
+            return Ok(());
         }
         // A muxer a leállításkor írja ki a fájl végét, ez hosszú felvételnél eltarthat egy ideig
-        unsafe { stop_output(self.api, self.record_output, Duration::from_secs(30)) };
+        let finished = unsafe { stop_output(self.api, self.record_output, Duration::from_secs(30)) };
         self.release_record_output();
         set_recording_wanted(false);
         let path = std::mem::take(&mut self.record_path);
+        self.sync_audio()?;
+        if !finished || RECORD_STOP_CODE.load(Ordering::SeqCst) != 0 || !std::fs::metadata(&path).is_ok_and(|m| m.len() > 0) {
+            return Err(tf("engine.recordingFinalize", &[("path", &path)]));
+        }
         logfile::write(&format!("Felvétel leállt: {path}"));
         emit(Event::Recorded(path));
+        Ok(())
     }
 
     fn release_record_output(&mut self) {
@@ -801,7 +1050,11 @@ impl Engine {
     }
 
     pub fn recording_since(&self) -> u64 {
-        if self.recording_active() { self.record_since } else { 0 }
+        if self.recording_active() {
+            self.record_since
+        } else {
+            0
+        }
     }
 
     pub fn replay_enabled(&self) -> bool {
@@ -809,11 +1062,16 @@ impl Engine {
     }
 
     pub fn buffer_since(&self) -> u64 {
-        if self.replay_active() { self.buffer_since } else { 0 }
+        if self.replay_active() {
+            self.buffer_since
+        } else {
+            0
+        }
     }
 
     fn teardown_pipeline(&mut self) {
-        self.stop_recording();
+        self.finish_pending_save();
+        let _ = self.stop_recording();
         self.release_record_output();
         let api = self.api;
         unsafe {
@@ -838,6 +1096,21 @@ impl Engine {
 
     /// Új beállítások alkalmazása: a puffert újraépíti, szükség esetén a videót is újrainicializálja.
     pub fn apply(&mut self, config: &Config) -> Result<(), String> {
+        if self.recording_active() || self.saving() {
+            return Err(t("engine.settingsBusy"));
+        }
+        let old = self.config.clone();
+        if let Err(error) = self.apply_inner(config) {
+            // Only persist a new configuration after it works. Restore the previous pipeline.
+            if let Err(rollback) = self.apply_inner(&old) {
+                return Err(format!("{error}\nRollback: {rollback}"));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn apply_inner(&mut self, config: &Config) -> Result<(), String> {
         self.teardown_pipeline();
         let old = std::mem::replace(&mut self.config, config.clone());
         let api = self.api;
@@ -852,6 +1125,7 @@ impl Engine {
         if old.mic_device != config.mic_device {
             self.update_mic(&config.mic_device);
         }
+        self.sync_audio()?;
         self.build_pipeline()
     }
 
@@ -864,6 +1138,9 @@ impl Engine {
     }
 
     fn update_mic(&self, device: &str) {
+        if self.mic.is_null() {
+            return;
+        }
         let settings = Data::new(self.api).str("device_id", device);
         unsafe { (self.api.obs_source_update)(self.mic, settings.ptr) };
         logfile::write(&format!("Mikrofon: {device}"));
@@ -899,8 +1176,18 @@ impl Engine {
 
     /// Újraindítja a puffert változatlan beállításokkal (pl. hiba miatti leállás után).
     pub fn restart(&mut self) -> Result<(), String> {
-        self.teardown_pipeline();
-        self.build_pipeline()
+        // Outputs share encoders: recovering replay must never stop manual recording.
+        if self.saving() {
+            return Err(t("engine.saveBusy"));
+        }
+        self.stop_replay();
+        set_replay_wanted(true);
+        let result = self.sync_audio().and_then(|_| self.start_replay());
+        if result.is_err() {
+            set_replay_wanted(false);
+            let _ = self.sync_audio();
+        }
+        result
     }
 
     pub fn set_desktop_visible(&mut self, visible: bool) {
@@ -914,11 +1201,27 @@ impl Engine {
     }
 
     /// A mentés háttérben készül el; az eredmény `Saved` (vagy `SaveFailed`) eseményként jön.
-    pub fn save(&self) -> Result<(), String> {
+    pub fn save(&mut self) -> Result<(), String> {
         if !self.replay_active() {
             return Err(t("engine.replayNotRunning"));
         }
-        let known = if self.config.buffer_dir.is_some() { Some(disk::begin_save()?) } else { None };
+        if SAVE_PENDING.swap(true, Ordering::SeqCst) {
+            return Err(t("engine.saveBusy"));
+        }
+        crate::resources::require_space(
+            Path::new(&self.config.output_dir),
+            crate::resources::MIN_FREE_BYTES.saturating_add(self.memory_buffer_bytes),
+        )
+        .inspect_err(|_| {
+            SAVE_PENDING.store(false, Ordering::SeqCst);
+        })?;
+        let known = if self.config.buffer_dir.is_some() {
+            Some(disk::begin_save().inspect_err(|_| {
+                SAVE_PENDING.store(false, Ordering::SeqCst);
+            })?)
+        } else {
+            None
+        };
         let proc_name = if known.is_some() { c"split_file" } else { c"save" };
         let mut cd = Calldata::new();
         let ok = unsafe {
@@ -930,26 +1233,49 @@ impl Engine {
             ok
         };
         let Some(known) = known else {
-            return if ok { Ok(()) } else { Err(t("engine.saveStart")) };
+            return if ok {
+                Ok(())
+            } else {
+                SAVE_PENDING.store(false, Ordering::SeqCst);
+                Err(t("engine.saveStart"))
+            };
         };
         if !ok {
-            disk::end_save();
+            drop(known);
+            SAVE_PENDING.store(false, Ordering::SeqCst);
             return Err(t("engine.saveStart"));
         }
         // A lezárásra várás és az összefűzés másodpercekig tart: nem tartja a motor zárát
         let (seconds, output_dir) = (self.config.buffer_seconds, PathBuf::from(&self.config.output_dir));
-        std::thread::spawn(move || match disk::finish_save(known, seconds, &output_dir) {
-            Ok(path) => emit(Event::Saved(Some(path.to_string_lossy().into_owned()))),
-            Err(e) => emit(Event::SaveFailed(e)),
-        });
+        self.save_worker = Some(std::thread::spawn(move || {
+            let result = disk::finish_save(known, seconds, &output_dir);
+            SAVE_PENDING.store(false, Ordering::SeqCst);
+            match result {
+                Ok(path) => emit(Event::Saved(Some(path.to_string_lossy().into_owned()))),
+                Err(e) => emit(Event::SaveFailed(e)),
+            }
+        }));
         Ok(())
     }
 
-    pub fn shutdown(mut self) {
+    pub fn shutdown(self) {
+        drop(self);
+    }
+
+    fn cleanup(&mut self) {
+        if !self.initialized {
+            return;
+        }
+        self.initialized = false;
         let api = self.api;
         self.teardown_pipeline();
-        sys::persist_display(api, self.display);
-        MIC_SOURCE.store(null_mut(), Ordering::SeqCst);
+        REPLAY_WANTED.store(false, Ordering::SeqCst);
+        RECORDING_WANTED.store(false, Ordering::SeqCst);
+        if !self.display.is_null() {
+            sys::persist_display(api, self.display);
+        }
+        let mut mic_guard = MIC_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
+        *mic_guard = 0;
         {
             let _guard = VISIBILITY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             DISPLAY_ITEM.store(null_mut(), Ordering::SeqCst);
@@ -959,7 +1285,9 @@ impl Engine {
             for channel in [CHANNEL_VIDEO, CHANNEL_DESKTOP_AUDIO, CHANNEL_MIC] {
                 (api.obs_set_output_source)(channel, null_mut());
             }
-            (api.obs_scene_release)(self.scene);
+            if !self.scene.is_null() {
+                (api.obs_scene_release)(self.scene);
+            }
             for source in [self.game, self.display, self.desktop_audio, self.mic] {
                 if !source.is_null() {
                     (api.obs_source_release)(source);
@@ -971,17 +1299,18 @@ impl Engine {
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 /// Memóriás replay buffer; mentéskor a libobs írja ki a fájlt a mentési mappába.
-unsafe fn create_memory_output(api: &Api, c: &Config) -> Ptr {
-    // A memórialimit bőven a várható méret fölött, hogy mindig az időkorlát döntsön
-    let max_size_mb = (c.buffer_seconds as i64 * (c.bitrate_kbps as i64 + 192) / 8 / 1000 * 3 / 2 + 64).clamp(256, 16384);
+unsafe fn create_memory_output(api: &Api, c: &Config, budget: crate::resources::BufferBudget) -> Ptr {
     let settings = Data::new(api)
         .str("directory", &forward(Path::new(&c.output_dir)))
         .str("format", "Replay %CCYY-%MM-%DD %hh-%mm-%ss")
         .str("extension", "mp4")
         .bool("allow_spaces", true)
-        .int("max_time_sec", c.buffer_seconds as i64)
-        .int("max_size_mb", max_size_mb);
+        .int("max_time_sec", budget.seconds as i64)
+        .int("max_size_mb", budget.max_mb as i64);
     (api.obs_output_create)(c"replay_buffer".as_ptr(), c"clipcat_replay".as_ptr(), settings.ptr, null_mut())
 }
 

@@ -124,7 +124,7 @@ function StatusCard({ settings, status, onStatus, update }: Omit<Props, "view" |
   let [title, sub] = statusText(status);
   let fill = 0;
   if (status?.replayActive) {
-    const total = settings?.bufferSeconds ?? 0;
+    const total = status.bufferSeconds || settings?.bufferSeconds || 0;
     const filled = Math.min(total, since(status.bufferSince));
     sub = t("status.buffer", { filled: formatDuration(filled), total: formatDuration(total) });
     fill = total ? (filled / total) * 100 : 0;
@@ -160,6 +160,9 @@ function StatusCard({ settings, status, onStatus, update }: Omit<Props, "view" |
           )}
         </div>
         {sub && <div className="-mt-1 text-xs leading-[1.35] text-muted tabular">{sub}</div>}
+        {status?.error && <div className="text-xs text-danger-soft">{status.error}</div>}
+        {status?.encoder && <div className="text-xs text-muted">{t("status.encoder", { name: status.encoder })}</div>}
+        {status?.encoder === "obs_x264" && <div className="text-xs text-warn-soft">{t("status.cpuEncoder")}</div>}
         {status?.replayActive && (
           <div className="h-[3px] overflow-hidden rounded-[3px] bg-panel-3">
             <span className="block h-full rounded-[inherit] bg-accent transition-[width] duration-1000 ease-linear" style={{ width: `${fill}%` }} />

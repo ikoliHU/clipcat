@@ -1,4 +1,4 @@
-import { t } from "./i18n";
+import { i18n, t } from "./i18n";
 import type { Clip } from "./tauri";
 
 export function prettyHotkey(hotkey: string | undefined): string {
@@ -13,9 +13,7 @@ export function formatDuration(seconds: number): string {
 }
 
 export function formatDate(unix: number): string {
-  const d = new Date(unix * 1000);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return new Intl.DateTimeFormat(i18n.lang, { dateStyle: "short", timeStyle: "short" }).format(new Date(unix * 1000));
 }
 
 export function formatSize(bytes: number): string {

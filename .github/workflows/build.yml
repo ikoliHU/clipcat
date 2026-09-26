@@ -24,7 +24,7 @@ jobs:
               src-tauri/target/release/bundle/appimage/*.AppImage
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Linux build dependencies
         if: runner.os == 'Linux'
@@ -32,32 +32,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: '1.97.1'
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
 
       # A rögzítőmotor (OBS portable zip kivonata) verziója a bundle-obs.ps1-ben van
       - name: Cache capture engine
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: src-tauri/obs
-          key: obs-${{ hashFiles('bundle-obs.ps1') }}
+          key: obs-${{ hashFiles('bundle-obs.ps1', 'scripts/bundle-lib.ps1') }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: lts/*
+          node-version: '24.16.0'
           cache: npm
       - run: npm ci
+
+      - run: npm test
+      - name: Prepare and verify capture bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./tests/bundle.test.ps1
+          ./bundle-obs.ps1
+          node tests/recording-crash.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native regression tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+      - name: Optimized GLib regression test
+        if: runner.os == 'Linux'
+        run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --test glib_backport
 
       # A CI-build aláíratlan (PR-en nincs secret); a frissítőcsomagokat a release.yml készíti
       - name: Build
         shell: bash
         run: npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: clipcat-${{ runner.os }}
           path: ${{ matrix.bundles }}

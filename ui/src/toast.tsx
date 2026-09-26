@@ -11,7 +11,10 @@ function Toast() {
   const [toast, setToast] = useState<(ToastPayload & { id: number }) | null>(null);
 
   useEffect(() => {
-    const unlisten = listen<ToastPayload>("toast", ({ payload }) => setToast((prev) => ({ ...payload, id: (prev?.id ?? 0) + 1 })));
+    const unlisten = listen<ToastPayload>("toast", ({ payload }) => {
+      document.documentElement.lang = payload.lang;
+      setToast((prev) => ({ ...payload, id: (prev?.id ?? 0) + 1 }));
+    });
     return () => { unlisten.then((off) => off()); };
   }, []);
 

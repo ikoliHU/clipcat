@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-toggle-record"
+description = "Enables the toggle_record command without any pre-configured scope."
+commands.allow = ["toggle_record"]
+
+[[permission]]
+identifier = "deny-toggle-record"
+description = "Denies the toggle_record command without any pre-configured scope."
+commands.deny = ["toggle_record"]

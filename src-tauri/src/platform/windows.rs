@@ -9,31 +9,23 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 use tauri::WebviewWindow;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, RECT};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    EnumDisplayDevicesW, EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW,
-    DISPLAY_DEVICEW, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+    EnumDisplayDevicesW, EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
 use windows_sys::Win32::System::LibraryLoader::{AddDllDirectory, SetDllDirectoryW};
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE,
-};
+use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows_sys::Win32::UI::Shell::{SHFileOperationW, SHFILEOPSTRUCTW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsZoomed, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, HWND_TOPMOST, MB_ICONASTERISK, MB_ICONEXCLAMATION, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsZoomed, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, MB_ICONASTERISK, MB_ICONEXCLAMATION, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 const DISPLAY_DEVICE_PRIMARY_DEVICE: u32 = 0x4;
@@ -75,22 +67,15 @@ pub fn primary_monitor() -> Option<Monitor> {
 
             let mut mode: DEVMODEW = zeroed();
             mode.dmSize = size_of::<DEVMODEW>() as u16;
-            let (width, height) =
-                if EnumDisplaySettingsW(adapter.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) != 0 {
-                    (mode.dmPelsWidth, mode.dmPelsHeight)
-                } else {
-                    (1920, 1080)
-                };
+            let (width, height) = if EnumDisplaySettingsW(adapter.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) != 0 {
+                (mode.dmPelsWidth, mode.dmPelsHeight)
+            } else {
+                (1920, 1080)
+            };
 
             let mut monitor: DISPLAY_DEVICEW = zeroed();
             monitor.cb = size_of::<DISPLAY_DEVICEW>() as u32;
-            let device_id = if EnumDisplayDevicesW(
-                adapter.DeviceName.as_ptr(),
-                0,
-                &mut monitor,
-                EDD_GET_DEVICE_INTERFACE_NAME,
-            ) != 0
-            {
+            let device_id = if EnumDisplayDevicesW(adapter.DeviceName.as_ptr(), 0, &mut monitor, EDD_GET_DEVICE_INTERFACE_NAME) != 0 {
                 from_wide(&monitor.DeviceID)
             } else {
                 String::new()
@@ -117,8 +102,7 @@ unsafe fn fullscreen_monitor(hwnd: HWND) -> Option<RECT> {
         return None;
     }
     let m = monitor_rect(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST))?;
-    (window.left <= m.left && window.top <= m.top && window.right >= m.right && window.bottom >= m.bottom)
-        .then_some(m)
+    (window.left <= m.left && window.top <= m.top && window.right >= m.right && window.bottom >= m.bottom).then_some(m)
 }
 
 /// Az értesítés helye: ha teljes képernyős alkalmazás (játék) van előtérben, annak a monitora,
@@ -370,40 +354,6 @@ fn hide(hwnd: HWND) {
     }
 }
 
-fn find_processes(exe_name: &str) -> Vec<u32> {
-    let mut pids = Vec::new();
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return pids;
-        }
-        let mut entry: PROCESSENTRY32W = zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-        if Process32FirstW(snapshot, &mut entry) != 0 {
-            loop {
-                if from_wide(&entry.szExeFile).eq_ignore_ascii_case(exe_name) {
-                    pids.push(entry.th32ProcessID);
-                }
-                if Process32NextW(snapshot, &mut entry) == 0 {
-                    break;
-                }
-            }
-        }
-        CloseHandle(snapshot);
-    }
-    pids
-}
-
-fn terminate(pid: u32) {
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if !handle.is_null() {
-            TerminateProcess(handle, 1);
-            CloseHandle(handle);
-        }
-    }
-}
-
 /// Lomtárba helyezés (visszaállítható törlés).
 pub fn recycle(path: &str) -> bool {
     let mut from: Vec<u16> = OsStr::new(path).encode_wide().collect();
@@ -470,33 +420,44 @@ pub fn state_dir() -> PathBuf {
     PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join("ClipCat")
 }
 
-/// Az előző verzió külön OBS-folyamatot futtatott; azt leállítjuk és a maradványait töröljük.
+/// Only remove ClipCat-owned legacy metadata. A process name never proves ownership.
 pub fn migrate_legacy() {
-    let state_dir = state_dir();
+    cleanup_legacy(&state_dir(), &config_dir());
+}
+
+fn cleanup_legacy(state_dir: &std::path::Path, config_dir: &std::path::Path) {
     let marker = state_dir.join("obs-config.txt");
     if !marker.exists() {
         return;
     }
-    for pid in find_processes("obs64.exe") {
-        terminate(pid);
-    }
-    for _ in 0..100 {
-        if find_processes("obs64.exe").is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
     for file in ["obs-config.txt", "state.json", "saved.json", "state.json.tmp", "saved.json.tmp"] {
         let _ = std::fs::remove_file(state_dir.join(file));
     }
-    let _ = std::fs::remove_file(config_dir().join("shadowplay.lua"));
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        // A lelőtt OBS jelzője miatt egy kézi OBS-indításkor csökkentett módot kínálna
-        if let Ok(entries) = std::fs::read_dir(PathBuf::from(appdata).join(r"obs-studio\.sentinel")) {
-            for entry in entries.flatten() {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
+    let _ = std::fs::remove_file(config_dir.join("shadowplay.lua"));
     logfile::write("A korábbi, külön OBS-folyamatos működés maradványai eltávolítva");
+}
+
+#[cfg(test)]
+mod migration_tests {
+    #[test]
+    fn migration_only_removes_owned_metadata_and_preserves_foreign_obs_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let owned = dir.path().join("ClipCat");
+        let foreign = dir.path().join("obs-studio/.sentinel");
+        std::fs::create_dir_all(&owned).unwrap();
+        std::fs::create_dir_all(&foreign).unwrap();
+        for path in [
+            owned.join("obs-config.txt"),
+            owned.join("shadowplay.lua"),
+            owned.join("keep.mp4"),
+            foreign.join("foreign-obs"),
+        ] {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        super::cleanup_legacy(&owned, &owned);
+        assert!(!owned.join("obs-config.txt").exists());
+        assert!(!owned.join("shadowplay.lua").exists());
+        assert!(owned.join("keep.mp4").exists());
+        assert!(foreign.join("foreign-obs").exists());
+    }
 }

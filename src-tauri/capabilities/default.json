@@ -1,7 +1,35 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "A főablak és az értesítés alapjogosultságai",
-  "windows": ["main", "toast"],
-  "permissions": ["core:default"]
+  "description": "Main UI commands only",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-locale",
+    "allow-open-project-link",
+    "allow-get-settings",
+    "allow-get-status",
+    "allow-list-clips",
+    "allow-save-settings",
+    "allow-buffer-budget",
+    "allow-list-mics",
+    "allow-disk-buffer-available",
+    "allow-save-replay",
+    "allow-toggle-record",
+    "allow-set-replay-enabled",
+    "allow-open-clip",
+    "allow-reveal-clip",
+    "allow-delete-clip",
+    "allow-open-output-folder",
+    "allow-pick-folder",
+    "allow-is-ptt-key-supported",
+    "allow-suspend-hotkeys",
+    "allow-resume-hotkeys",
+    "allow-get-update-state",
+    "allow-check-update",
+    "allow-install-update"
+  ]
 }

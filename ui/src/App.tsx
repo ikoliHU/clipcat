@@ -6,8 +6,10 @@ import { Sidebar } from "./components/Sidebar";
 import { invoke, listen } from "./lib/tauri";
 import type { Clip, Settings, Status, UpdateState, View } from "./lib/tauri";
 import { pruneThumbs, thumbsReady, tileKey } from "./lib/thumbs";
+import { loadLocale, useLocale } from "./lib/i18n";
 
 export function App() {
+  useLocale();
   const [view, setView] = useState<View>("gallery");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -37,6 +39,7 @@ export function App() {
       listen("clip-saved", () => loadClips()),
       listen<View>("open-view", (e) => setView(e.payload)),
       listen<UpdateState>("update", (e) => setUpdate(e.payload)),
+      listen("locale-changed", () => { void loadLocale(); }),
       // Az ablak elrejtésekor a lejátszás is leáll
       listen("main-hidden", () => setPlaying(null)),
     ];

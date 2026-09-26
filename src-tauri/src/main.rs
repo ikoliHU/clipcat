@@ -1,10 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clips;
 mod engine;
+mod media;
+use clips::Clip;
 mod games;
 mod i18n;
+mod links;
 mod logfile;
 mod platform;
+mod process;
+mod resources;
 mod settings;
 mod updater;
 
@@ -13,12 +19,11 @@ use i18n::{t, tf};
 use serde::Serialize;
 use serde_json::json;
 use settings::Settings;
-#[cfg(windows)]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -57,6 +62,8 @@ struct Status {
     /// A kézi felvétel kezdete (Unix ms), 0 ha nem fut
     recording_since: u64,
     error: Option<String>,
+    encoder: String,
+    buffer_seconds: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -69,12 +76,19 @@ enum Action {
 
 struct AppState {
     settings: Mutex<Settings>,
+    operations: Mutex<()>,
+    installing: AtomicBool,
+    save_in_progress: AtomicBool,
+    hotkeys_suspended: AtomicBool,
+    hotkey_generation: AtomicU64,
+    selected_folders: Mutex<HashSet<PathBuf>>,
     status: Mutex<Status>,
     shortcuts: Mutex<Vec<(Shortcut, Action)>>,
     /// A natív és a polling gyorsbillentyű-esemény ugyanazt a lenyomást ne futtassa kétszer.
     last_shortcut: Mutex<[Option<Instant>; 4]>,
     /// A tálcamenü állapotfüggő elemei: (felvétel, visszajátszás)
     tray_items: Mutex<Option<(MenuItem<Wry>, MenuItem<Wry>)>>,
+    tray_labels: Mutex<Vec<(MenuItem<Wry>, &'static str)>>,
     engine: Mutex<Option<Engine>>,
     engine_error: Mutex<Option<String>>,
     /// A mentés kérésekor előtérben lévő játék mappája (a mentés csak később készül el)
@@ -82,16 +96,6 @@ struct AppState {
     last_recover: Mutex<Option<Instant>>,
     quitting: AtomicBool,
     toast_generation: AtomicU64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Clip {
-    path: String,
-    name: String,
-    game: String,
-    size: u64,
-    modified: u64,
 }
 
 fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
@@ -138,6 +142,7 @@ fn engine_config(s: &Settings) -> engine::Config {
         capture_desktop: s.capture_desktop,
         monitor_id: monitor.map(|m| m.device_id).unwrap_or_default(),
         mic_device: s.mic_device.clone(),
+        mic_enabled: s.mic_mode != "off",
     }
 }
 
@@ -152,11 +157,10 @@ fn apply_mic_settings(s: &Settings) {
 }
 
 /// Push-to-talk: a mikrofon csak a gomb nyomva tartása alatt (és utána egy kis ideig) szól.
-fn start_mic_thread() {
-    std::thread::spawn(|| {
-        let mut applied: Option<bool> = None;
+fn start_mic_thread(app: AppHandle) {
+    std::thread::spawn(move || {
         let mut last_pressed = Instant::now() - PTT_RELEASE_DELAY;
-        loop {
+        while !state(&app).quitting.load(Ordering::SeqCst) {
             let muted = match MIC_MODE.load(Ordering::SeqCst) {
                 MIC_ALWAYS => false,
                 MIC_PTT => {
@@ -167,15 +171,22 @@ fn start_mic_thread() {
                 }
                 _ => true,
             };
-            if applied != Some(muted) && engine::set_mic_muted(muted) {
-                applied = Some(muted);
-            }
-            std::thread::sleep(Duration::from_millis(15));
+            engine::set_mic_muted(muted);
+            std::thread::sleep(Duration::from_millis(if MIC_MODE.load(Ordering::SeqCst) == MIC_PTT {
+                15
+            } else {
+                200
+            }));
         }
     });
 }
 
 fn start_engine(app: &AppHandle) {
+    let app_state = state(app);
+    let operation = app_state.operations.lock().unwrap();
+    if app_state.quitting.load(Ordering::SeqCst) {
+        return;
+    }
     let handle = app.clone();
     engine::set_event_handler(move |event| on_engine_event(&handle, event));
     let settings = current_settings(app);
@@ -192,6 +203,7 @@ fn start_engine(app: &AppHandle) {
             show_toast(app, "error", &t("toast.captureNotStarted"), &e);
         }
     }
+    drop(operation);
     refresh_status(app);
 }
 
@@ -211,10 +223,19 @@ fn on_engine_event(app: &AppHandle, event: engine::Event) {
         }
         engine::Event::RecordingFailed(code) => {
             logfile::write(&format!("A felvétel hiba miatt leállt, kód: {code}"));
-            show_toast(app, "error", &t("toast.recordingStopped"), &tf("toast.errorCode", &[("code", &code)]));
+            show_toast(
+                app,
+                "error",
+                &t("toast.recordingStopped"),
+                &tf("toast.errorCode", &[("code", &code)]),
+            );
         }
-        engine::Event::Saved(None) => show_toast(app, "error", &t("toast.saveFailed"), &t("toast.savedClipMissing")),
+        engine::Event::Saved(None) => {
+            state(app).save_in_progress.store(false, Ordering::SeqCst);
+            show_toast(app, "error", &t("toast.saveFailed"), &t("toast.savedClipMissing"));
+        }
         engine::Event::SaveFailed(e) => {
+            state(app).save_in_progress.store(false, Ordering::SeqCst);
             logfile::write(&format!("Mentés sikertelen: {e}"));
             show_toast(app, "error", &t("toast.saveFailed"), &e);
         }
@@ -228,11 +249,14 @@ fn on_engine_event(app: &AppHandle, event: engine::Event) {
 
 /// Mentés után üríti a puffert, így a következő klip nem ismétli meg a most mentett részt.
 fn clear_buffer(app: &AppHandle) {
+    let st = state(app);
+    let operation = st.operations.lock().unwrap();
     if let Some(engine) = state(app).engine.lock().unwrap().as_mut() {
         if let Err(e) = engine.clear_replay() {
             logfile::write(&format!("A puffer nem üríthető: {e}"));
         }
     }
+    drop(operation);
     refresh_status(app);
 }
 
@@ -272,7 +296,14 @@ fn finish_save(app: &AppHandle, src: PathBuf) {
     }
     let final_path = if moved { target } else { src };
     logfile::write(&format!("Klip mentve: {}", final_path.display()));
-    announce_clip(app, &final_path, &folder, &t("toast.clipSaved"), (!moved).then(|| t("toast.moveFailed")));
+    announce_clip(
+        app,
+        &final_path,
+        &folder,
+        &t("toast.clipSaved"),
+        (!moved).then(|| t("toast.moveFailed")),
+    );
+    state(app).save_in_progress.store(false, Ordering::SeqCst);
 }
 
 fn finish_recording(app: &AppHandle, path: PathBuf) {
@@ -288,12 +319,14 @@ fn finish_recording(app: &AppHandle, path: PathBuf) {
 /// Legutóbbi klipként megjegyzi, frissíti a galériát és értesítést mutat.
 fn announce_clip(app: &AppHandle, path: &Path, folder: &str, title: &str, note: Option<String>) {
     let st = state(app);
+    let operation = st.operations.lock().unwrap();
     let open_hotkey = {
         let mut s = st.settings.lock().unwrap();
         s.last_clip = Some(path.to_string_lossy().into_owned());
         let _ = settings::save(&s);
         pretty_hotkey(&s.hotkey_open_folder)
     };
+    drop(operation);
     let _ = app.emit("clip-saved", json!({ "path": path.to_string_lossy(), "game": folder }));
     let detail = match note {
         Some(note) => format!("{folder} · {note}"),
@@ -305,16 +338,32 @@ fn announce_clip(app: &AppHandle, path: &Path, folder: &str, title: &str, note: 
 
 fn refresh_status(app: &AppHandle) {
     let st = state(app);
+    let Ok(_operation) = st.operations.try_lock() else { return };
+    if let Some(engine) = st.engine.lock().unwrap().as_mut() {
+        if let Err(error) = engine.check_resources() {
+            *st.engine_error.lock().unwrap() = Some(error);
+        }
+    }
     let snapshot = || {
         st.engine.lock().unwrap().as_ref().map(|e| {
-            (e.replay_enabled(), e.replay_active(), e.buffer_since(), e.recording_active(), e.recording_since())
+            (
+                e.replay_enabled(),
+                e.replay_active(),
+                e.buffer_since(),
+                e.recording_active(),
+                e.recording_since(),
+            )
         })
     };
     let mut snap = snapshot();
 
     // Ha a puffer hiba miatt leállt (és nem kézzel állították le), újraindítjuk (nem túl sűrűn)
     let recover = st.settings.lock().unwrap().keep_obs_running;
-    if snap.is_some_and(|(enabled, active, ..)| enabled && !active) && recover && !st.quitting.load(Ordering::SeqCst) {
+    if snap.is_some_and(|(enabled, active, ..)| enabled && !active)
+        && recover
+        && !st.quitting.load(Ordering::SeqCst)
+        && !st.installing.load(Ordering::SeqCst)
+    {
         let mut last = st.last_recover.lock().unwrap();
         if last.is_none_or(|t| t.elapsed() > RECOVER_COOLDOWN) {
             *last = Some(Instant::now());
@@ -322,6 +371,9 @@ fn refresh_status(app: &AppHandle) {
             if let Some(engine) = st.engine.lock().unwrap().as_mut() {
                 if let Err(e) = engine.restart() {
                     logfile::write(&format!("Újraindítás sikertelen: {e}"));
+                    *st.engine_error.lock().unwrap() = Some(e);
+                } else {
+                    *st.engine_error.lock().unwrap() = None;
                 }
             }
             snap = snapshot();
@@ -329,6 +381,13 @@ fn refresh_status(app: &AppHandle) {
     }
 
     let (replay_enabled, replay_active, buffer_since, recording, recording_since) = snap.unwrap_or_default();
+    let (encoder, buffer_seconds) = st
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|e| (e.encoder_name().to_string(), e.effective_buffer_seconds()))
+        .unwrap_or_default();
     let status = Status {
         obs_installed: engine::engine_available(),
         obs_running: snap.is_some(),
@@ -338,6 +397,8 @@ fn refresh_status(app: &AppHandle) {
         recording,
         recording_since,
         error: st.engine_error.lock().unwrap().clone(),
+        encoder,
+        buffer_seconds,
     };
     let mut current = st.status.lock().unwrap();
     if *current != status {
@@ -349,9 +410,11 @@ fn refresh_status(app: &AppHandle) {
 }
 
 fn start_status_thread(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        refresh_status(&app);
-        std::thread::sleep(Duration::from_secs(2));
+    std::thread::spawn(move || {
+        while !state(&app).quitting.load(Ordering::SeqCst) {
+            refresh_status(&app);
+            std::thread::sleep(Duration::from_secs(2));
+        }
     });
 }
 
@@ -359,17 +422,28 @@ fn start_status_thread(app: AppHandle) {
 
 fn request_save(app: &AppHandle) -> Result<(), String> {
     let st = state(app);
+    let _operation = st.operations.lock().unwrap();
+    if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
+        return Err(t("update.busy"));
+    }
+    if st.save_in_progress.swap(true, Ordering::SeqCst) {
+        return Err(t("engine.saveBusy"));
+    }
     let status = st.status.lock().unwrap().clone();
     let result = if !status.obs_installed {
         Err(t("error.engineMissing"))
     } else {
         let folder = games::folder_for(platform::foreground_window());
         *st.pending_folder.lock().unwrap() = Some(folder.clone());
-        match st.engine.lock().unwrap().as_ref() {
+        match st.engine.lock().unwrap().as_mut() {
             Some(engine) => engine.save().map(|()| folder),
             None => Err(t("error.engineNotRunning")),
         }
     };
+    if result.is_err() {
+        st.save_in_progress.store(false, Ordering::SeqCst);
+        st.pending_folder.lock().unwrap().take();
+    }
     match &result {
         Ok(folder) => show_toast(app, "pending", &t("toast.clipSaving"), folder),
         Err(e) => {
@@ -383,6 +457,10 @@ fn request_save(app: &AppHandle) -> Result<(), String> {
 /// Kézi felvétel indítása vagy leállítása (a leállítás a fájl lezárásáig tart, ezért nem a fő szálon fut).
 fn toggle_recording(app: &AppHandle) {
     let st = state(app);
+    let operation = st.operations.lock().unwrap();
+    if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
+        return;
+    }
     let result = {
         let mut engine = st.engine.lock().unwrap();
         match engine.as_mut() {
@@ -390,8 +468,7 @@ fn toggle_recording(app: &AppHandle) {
             Some(e) if e.recording_active() => {
                 // A leállítás a fájl lezárásáig tart, ezért előtte jelezzük, hogy a mentés elkezdődött
                 show_toast(app, "pending", &t("toast.recordingSaving"), "");
-                e.stop_recording();
-                Ok(None)
+                e.stop_recording().map(|()| None)
             }
             Some(e) => {
                 let folder = games::folder_for(platform::foreground_window());
@@ -403,7 +480,11 @@ fn toggle_recording(app: &AppHandle) {
     match result {
         Ok(Some(folder)) => {
             let hotkey = pretty_hotkey(&current_settings(app).hotkey_record);
-            let detail = if hotkey.is_empty() { folder } else { format!("{folder} · {}", tf("toast.stopHint", &[("hotkey", &hotkey)])) };
+            let detail = if hotkey.is_empty() {
+                folder
+            } else {
+                format!("{folder} · {}", tf("toast.stopHint", &[("hotkey", &hotkey)]))
+            };
             show_toast(app, "ok", &t("toast.recordingStarted"), &detail);
         }
         Ok(None) => {}
@@ -412,19 +493,29 @@ fn toggle_recording(app: &AppHandle) {
             show_toast(app, "error", &t("toast.recordFailed"), &e);
         }
     }
+    drop(operation);
     refresh_status(app);
 }
 
 /// A választást megjegyzi: a következő indításkor is így indul.
 fn set_replay(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let st = state(app);
+    let operation = st.operations.lock().unwrap();
+    if st.save_in_progress.load(Ordering::SeqCst) {
+        return Err(t("engine.saveBusy"));
+    }
+    if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
+        return Err(t("update.busy"));
+    }
     let result = match st.engine.lock().unwrap().as_mut() {
         Some(engine) => engine.set_replay_enabled(enabled),
         None => Err(t("error.engineNotRunning")),
     };
     {
         let mut s = st.settings.lock().unwrap();
-        s.replay_enabled = enabled;
+        if result.is_ok() {
+            s.replay_enabled = enabled;
+        }
         if let Err(e) = settings::save(&s) {
             logfile::write(&format!("A visszajátszás állapota nem menthető: {e}"));
         }
@@ -434,6 +525,7 @@ fn set_replay(app: &AppHandle, enabled: bool) -> Result<(), String> {
         if enabled { "elindítva" } else { "leállítva" },
         result.as_ref().err().map_or(String::new(), |e| format!(" – hiba: {e}"))
     ));
+    drop(operation);
     refresh_status(app);
     result
 }
@@ -500,7 +592,7 @@ fn run_shortcut_action(app: &AppHandle, action: Action) -> bool {
 fn start_hotkey_fallback(app: AppHandle) {
     std::thread::spawn(move || {
         let mut down = HashSet::new();
-        loop {
+        while !state(&app).quitting.load(Ordering::SeqCst) {
             let shortcuts = state(&app).shortcuts.lock().unwrap().clone();
             down.retain(|shortcut| shortcuts.iter().any(|(candidate, _)| candidate == shortcut));
             for (shortcut, action) in shortcuts {
@@ -523,6 +615,7 @@ fn start_hotkey_fallback(app: AppHandle) {
 /// Leállítja a rögzítőmotort (kilépéskor és frissítés telepítése előtt).
 fn stop_engine(app: &AppHandle) {
     let st = state(app);
+    let _operation = st.operations.lock().unwrap();
     st.quitting.store(true, Ordering::SeqCst);
     let engine = st.engine.lock().unwrap().take();
     if let Some(engine) = engine {
@@ -554,7 +647,10 @@ fn show_toast(app: &AppHandle, kind: &str, title: &str, detail: &str) {
     let generation = st.toast_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
     platform::show_overlay(&window, TOAST_MARGIN);
-    let _ = app.emit("toast", json!({ "kind": kind, "title": title, "detail": detail }));
+    let _ = app.emit(
+        "toast",
+        json!({ "kind": kind, "title": title, "detail": detail, "lang": i18n::lang() }),
+    );
 
     let app = app.clone();
     std::thread::spawn(move || {
@@ -609,7 +705,11 @@ fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
         pretty_hotkey(&s.hotkey_record),
         pretty_hotkey(&s.hotkey_open_folder),
         pretty_hotkey(&s.hotkey_gallery),
-        if failed.is_empty() { String::new() } else { format!(" | NEM sikerült: {}", failed.join(", ")) }
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(" | NEM sikerült: {}", failed.join(", "))
+        }
     ));
     if failed.is_empty() {
         Ok(())
@@ -619,15 +719,14 @@ fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
     }
 }
 
-fn allow_clip_dir(app: &AppHandle, dir: &str) {
-    let _ = app.asset_protocol_scope().allow_directory(dir, true);
-}
-
 // ---------- Tálca ----------
 
 fn update_tray(app: &AppHandle, status: &Status) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let s = current_settings(app);
+    for (item, key) in state(app).tray_labels.lock().unwrap().iter() {
+        let _ = item.set_text(t(key));
+    }
     let (icon, tooltip) = if status.recording {
         (ICON_ACTIVE, tf("tray.recording", &[("hotkey", &pretty_hotkey(&s.hotkey_record))]))
     } else if status.replay_active {
@@ -642,9 +741,17 @@ fn update_tray(app: &AppHandle, status: &Status) {
         (ICON_IDLE, t("tray.replayStopped"))
     };
     if let Some((record, replay)) = state(app).tray_items.lock().unwrap().as_ref() {
-        let _ = record.set_text(t(if status.recording { "tray.stopRecording" } else { "tray.startRecording" }));
+        let _ = record.set_text(t(if status.recording {
+            "tray.stopRecording"
+        } else {
+            "tray.startRecording"
+        }));
         let _ = record.set_enabled(status.obs_running);
-        let _ = replay.set_text(t(if status.replay_enabled { "tray.pauseReplay" } else { "tray.resumeReplay" }));
+        let _ = replay.set_text(t(if status.replay_enabled {
+            "tray.pauseReplay"
+        } else {
+            "tray.resumeReplay"
+        }));
         let _ = replay.set_enabled(status.obs_running);
     }
     if let Ok(image) = Image::from_bytes(icon) {
@@ -697,12 +804,24 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 show_main(tray.app_handle(), "gallery");
             }
         })
         .build(app)?;
     *state(app).tray_items.lock().unwrap() = Some((record, replay));
+    *state(app).tray_labels.lock().unwrap() = vec![
+        (gallery, "tray.openGallery"),
+        (save, "tray.saveNow"),
+        (folder, "tray.lastClipFolder"),
+        (settings, "tray.settings"),
+        (quit_item, "tray.quit"),
+    ];
     Ok(())
 }
 
@@ -710,47 +829,20 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 /// A felület csak a mentési mappán belüli fájlokhoz nyúlhat.
 fn clip_in_output_dir(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
-    let root = std::fs::canonicalize(current_settings(app).output_dir).map_err(|e| e.to_string())?;
-    let clip = std::fs::canonicalize(path).map_err(|_| t("error.clipNotFound"))?;
-    if clip.starts_with(&root) && clip.is_file() {
-        Ok(PathBuf::from(path))
-    } else {
-        Err(t("error.clipOutsideOutput"))
-    }
-}
-
-fn is_video(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| ["mp4", "mkv", "mov"].iter().any(|v| e.eq_ignore_ascii_case(v)))
-}
-
-fn collect_clips(dir: &Path, game: &str, out: &mut Vec<Clip>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(meta) = entry.metadata() else { continue };
-        if !meta.is_file() || !is_video(&path) {
-            continue;
-        }
-        out.push(Clip {
-            path: path.to_string_lossy().into_owned(),
-            name: entry.file_name().to_string_lossy().into_owned(),
-            game: game.to_string(),
-            size: meta.len(),
-            modified: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_secs()),
-        });
-    }
+    clips::checked_path(Path::new(&current_settings(app).output_dir), Path::new(path))
 }
 
 /// Az aktív nyelv kódja és szövegei a felületnek
 #[tauri::command]
 fn get_locale() -> serde_json::Value {
     json!({ "lang": i18n::lang(), "messages": i18n::messages() })
+}
+
+#[tauri::command]
+fn open_project_link(target: String) -> Result<(), String> {
+    let url = links::project_url(&target).ok_or_else(|| "Unknown project link".to_string())?;
+    platform::open_path(url);
+    Ok(())
 }
 
 #[tauri::command]
@@ -766,73 +858,108 @@ fn get_status(app: AppHandle) -> Status {
 #[tauri::command]
 async fn list_clips(app: AppHandle) -> Vec<Clip> {
     let root = PathBuf::from(current_settings(&app).output_dir);
-    let recording = state(&app).engine.lock().unwrap().as_ref().and_then(|e| e.recording_path().map(PathBuf::from));
-    let mut clips = Vec::new();
-    collect_clips(&root, "", &mut clips);
-    if let Ok(entries) = std::fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                collect_clips(&entry.path(), &entry.file_name().to_string_lossy(), &mut clips);
-            }
-        }
-    }
-    // A még íródó felvétel nem játszható le
-    if let Some(recording) = recording {
-        clips.retain(|c| Path::new(&c.path) != recording);
-    }
-    clips.sort_by(|a, b| b.modified.cmp(&a.modified));
-    clips.truncate(500);
-    clips
+    let recording = state(&app)
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|e| e.recording_path().map(PathBuf::from));
+    tauri::async_runtime::spawn_blocking(move || clips::list(&root, recording.as_deref()))
+        .await
+        .unwrap_or_default()
 }
 
 /// Menti a beállításokat; figyelmeztetéssel tér vissza, ha valami csak részben sikerült.
 #[tauri::command]
 async fn save_settings(app: AppHandle, settings: Settings) -> Result<String, String> {
-    settings.validate()?;
-    parse_hotkeys(&settings)?;
-    if settings.buffer_storage == "disk" && !engine::disk_buffer_available() {
-        return Err(t("validate.diskUnavailable"));
-    }
-
-    let st = state(&app);
-    let old = current_settings(&app);
-    let mut new = settings;
-    new.last_clip = old.last_clip.clone();
-    // Ezeket nem a beállítási űrlap kezeli
-    new.replay_enabled = old.replay_enabled;
-    settings::save(&new).map_err(|e| tf("error.settingsSave", &[("error", &e)]))?;
-    *st.settings.lock().unwrap() = new.clone();
-
-    let mut warnings = Vec::new();
-    if let Err(e) = register_hotkeys(&app, &new) {
-        warnings.push(e);
-    }
-    if old.autostart != new.autostart {
-        if let Err(e) = platform::set_autostart(new.autostart) {
-            warnings.push(tf("error.autostart", &[("error", &e)]));
-        }
-    }
-    allow_clip_dir(&app, &new.output_dir);
-    apply_mic_settings(&new);
-
-    let rebuild = old.pipeline_fingerprint() != new.pipeline_fingerprint();
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let st = state(&handle);
-        let mut engine = st.engine.lock().unwrap();
-        let Some(engine) = engine.as_mut() else { return Ok(()) };
-        if rebuild {
-            engine.apply(&engine_config(&new))
-        } else {
-            engine.set_desktop_visible(new.capture_desktop);
-            engine.set_mic_device(&new.mic_device);
-            Ok(())
+        let _operation = st.operations.lock().unwrap();
+        if st.installing.load(Ordering::SeqCst) || st.quitting.load(Ordering::SeqCst) {
+            return Err(t("update.busy"));
         }
+        settings.validate()?;
+        parse_hotkeys(&settings)?;
+        let old = current_settings(&handle);
+        let mut new = settings;
+        for (previous, next) in [(&old.output_dir, &new.output_dir), (&old.buffer_dir, &new.buffer_dir)] {
+            if previous != next {
+                let canonical = Path::new(next).canonicalize().map_err(|e| e.to_string())?;
+                if !st.selected_folders.lock().unwrap().contains(&canonical) {
+                    return Err(t("validate.pickFolder"));
+                }
+            }
+        }
+        new.last_clip = old.last_clip.clone();
+        new.replay_enabled = old.replay_enabled;
+        let rebuild = old.pipeline_fingerprint() != new.pipeline_fingerprint();
+        if rebuild && new.buffer_storage == "disk" && !engine::disk_buffer_available() {
+            return Err(t("validate.diskUnavailable"));
+        }
+        if rebuild && st.save_in_progress.load(Ordering::SeqCst) {
+            return Err(t("engine.settingsBusy"));
+        }
+        let mut slot = st.engine.lock().unwrap();
+        if let Some(engine) = slot.as_mut() {
+            if rebuild {
+                engine.apply(&engine_config(&new))?;
+            } else {
+                engine.set_desktop_visible(new.capture_desktop);
+                engine.set_mic_device(&new.mic_device);
+                if let Err(error) = engine.set_mic_enabled(new.mic_mode != "off") {
+                    engine.set_desktop_visible(old.capture_desktop);
+                    engine.set_mic_device(&old.mic_device);
+                    let _ = engine.set_mic_enabled(old.mic_mode != "off");
+                    return Err(error);
+                }
+            }
+        } else if rebuild && engine::engine_available() {
+            *slot = Some(Engine::start(&engine_config(&new), new.replay_enabled)?);
+        }
+        if let Err(error) = settings::save(&new) {
+            if let Some(engine) = slot.as_mut() {
+                if rebuild {
+                    let _ = engine.apply(&engine_config(&old));
+                } else {
+                    engine.set_desktop_visible(old.capture_desktop);
+                    engine.set_mic_device(&old.mic_device);
+                    let _ = engine.set_mic_enabled(old.mic_mode != "off");
+                }
+            }
+            return Err(tf("error.settingsSave", &[("error", &error)]));
+        }
+        drop(slot);
+        *st.settings.lock().unwrap() = new.clone();
+        *st.engine_error.lock().unwrap() = None;
+        i18n::set_language(&new.language);
+        apply_mic_settings(&new);
+        let mut warnings = Vec::new();
+        if let Err(error) = register_hotkeys(&handle, &new) {
+            warnings.push(error);
+        }
+        if old.autostart != new.autostart {
+            if let Err(error) = platform::set_autostart(new.autostart) {
+                warnings.push(tf("error.autostart", &[("error", &error)]));
+            }
+        }
+        let _ = handle.emit("locale-changed", ());
+        let status = st.status.lock().unwrap().clone();
+        update_tray(&handle, &status);
+        if let Some(toast) = handle.get_webview_window("toast") {
+            let _ = toast.set_title(&t("toast.windowTitle"));
+        }
+        Ok(warnings.join("\n"))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
     refresh_status(&app);
-    Ok(warnings.join("\n"))
+    result
+}
+
+#[tauri::command]
+fn buffer_budget(seconds: u32, bitrate_mbps: u32) -> resources::BufferBudget {
+    resources::memory_budget(seconds.min(1200), bitrate_mbps.clamp(5, 150) * 1000, resources::memory())
 }
 
 #[derive(Serialize)]
@@ -912,7 +1039,10 @@ fn open_output_folder(app: AppHandle) {
 async fn pick_folder(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
     tauri::async_runtime::spawn_blocking(move || {
-        app.dialog().file().blocking_pick_folder().map(|p| p.to_string())
+        let selected = app.dialog().file().blocking_pick_folder()?.to_string();
+        let canonical = Path::new(&selected).canonicalize().ok()?;
+        state(&app).selected_folders.lock().unwrap().insert(canonical);
+        Some(selected)
     })
     .await
     .ok()
@@ -927,13 +1057,30 @@ fn is_ptt_key_supported(vk: u32) -> bool {
 /// Gyorsbillentyű-rögzítés közben a meglévők ne süljenek el.
 #[tauri::command]
 fn suspend_hotkeys(app: AppHandle) {
+    if !app
+        .get_webview_window("main")
+        .is_some_and(|window| window.is_focused().unwrap_or(false))
+    {
+        return;
+    }
+    state(&app).hotkeys_suspended.store(true, Ordering::SeqCst);
     let _ = app.global_shortcut().unregister_all();
     state(&app).shortcuts.lock().unwrap().clear();
+    let generation = state(&app).hotkey_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(35));
+        if state(&app).hotkey_generation.load(Ordering::SeqCst) == generation {
+            resume_hotkeys(app);
+        }
+    });
 }
 
 #[tauri::command]
 fn resume_hotkeys(app: AppHandle) {
-    let _ = register_hotkeys(&app, &current_settings(&app));
+    state(&app).hotkey_generation.fetch_add(1, Ordering::SeqCst);
+    if state(&app).hotkeys_suspended.swap(false, Ordering::SeqCst) {
+        let _ = register_hotkeys(&app, &current_settings(&app));
+    }
 }
 
 #[tauri::command]
@@ -976,7 +1123,7 @@ fn run_selftest(dir: &str, seconds: u64) -> i32 {
         logfile::write(&format!("Önteszt: {text}"));
     };
 
-    let engine = match Engine::start(&engine_config(&s), true) {
+    let mut engine = match Engine::start(&engine_config(&s), true) {
         Ok(engine) => engine,
         Err(e) => {
             report(format!("HIBA indítás: {e}"));
@@ -986,7 +1133,8 @@ fn run_selftest(dir: &str, seconds: u64) -> i32 {
     std::thread::sleep(Duration::from_secs(seconds));
     let active = engine.replay_active();
     let result = engine.save().and_then(|_| {
-        rx.recv_timeout(Duration::from_secs(30)).map_err(|_| "nem jött mentési jelzés".to_string())?
+        rx.recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "nem jött mentési jelzés".to_string())?
     });
     engine.shutdown();
     match result {
@@ -1006,14 +1154,8 @@ fn run_selftest(dir: &str, seconds: u64) -> i32 {
 /// Összeomláskor a hibaüzenet a crash.log-ba kerül (az exe-nek nincs konzolja).
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let dir = logfile::state_dir();
-        let _ = std::fs::create_dir_all(&dir);
         let text = format!("{} {info}\n", platform::local_time("%Y.%m.%d %H:%M:%S"));
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("crash.log"))
-            .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()));
+        logfile::write_crash(&text);
     }));
 }
 
@@ -1028,23 +1170,38 @@ fn main() {
     let autostarted = args.iter().any(|a| a == "--autostart");
     let settings = settings::load();
 
+    i18n::set_language(&settings.language);
+
     // Az állapotot a Builderen kell regisztrálni: a konfigurációban megadott ablakok a setup előtt
     // jönnek létre, és a felület JavaScriptje gyors betöltésnél már a setup előtt parancsokat hív.
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("clipcat", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let allowed = context.webview_label() == "main";
+            std::thread::spawn(move || {
+                let root = PathBuf::from(current_settings(&app).output_dir);
+                responder.respond(media::response(&root, request, allowed));
+            });
+        })
         // A webview alapértelmezett helyi menüje (Vissza, Frissítés, Vizsgálat…) sehol ne jelenjen meg
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
-                let _ = webview.eval(
-                    "document.addEventListener('contextmenu', e => e.preventDefault());",
-                );
+                let _ = webview.eval("document.addEventListener('contextmenu', e => e.preventDefault());");
             }
         })
         .manage(AppState {
             settings: Mutex::new(settings.clone()),
+            operations: Mutex::new(()),
+            installing: AtomicBool::new(false),
+            save_in_progress: AtomicBool::new(false),
+            hotkeys_suspended: AtomicBool::new(false),
+            hotkey_generation: AtomicU64::new(0),
+            selected_folders: Mutex::new(HashSet::new()),
             status: Mutex::new(Status::default()),
             shortcuts: Mutex::new(Vec::new()),
             last_shortcut: Mutex::new([None; 4]),
             tray_items: Mutex::new(None),
+            tray_labels: Mutex::new(Vec::new()),
             engine: Mutex::new(None),
             engine_error: Mutex::new(None),
             pending_folder: Mutex::new(None),
@@ -1081,7 +1238,6 @@ fn main() {
             logfile::init("clipcat.log");
             let handle = app.handle().clone();
             let _ = platform::set_autostart(settings.autostart);
-            allow_clip_dir(&handle, &settings.output_dir);
             apply_mic_settings(&settings);
             build_tray(&handle)?;
 
@@ -1093,13 +1249,15 @@ fn main() {
             if let Some(main) = app.get_webview_window("main") {
                 let main_handle = main.clone();
                 main.on_window_event(move |event| {
+                    if matches!(event, WindowEvent::Focused(false) | WindowEvent::CloseRequested { .. }) {
+                        resume_hotkeys(main_handle.app_handle().clone());
+                    }
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = main_handle.hide();
                         // A rejtett ablakban ne szóljon tovább a lejátszó: a felület a
                         // "main-hidden" eseményre bezárja; a szüneteltetés csak védőháló
-                        let _ = main_handle
-                            .eval("document.querySelectorAll('video').forEach(v => v.pause());");
+                        let _ = main_handle.eval("document.querySelectorAll('video').forEach(v => v.pause());");
                         let _ = main_handle.emit("main-hidden", ());
                     }
                 });
@@ -1107,7 +1265,11 @@ fn main() {
 
             logfile::write(&format!(
                 "Visszajátszás induláskor: {}",
-                if settings.replay_enabled { "bekapcsolva" } else { "szünetel (legutóbb leállítva)" }
+                if settings.replay_enabled {
+                    "bekapcsolva"
+                } else {
+                    "szünetel (legutóbb leállítva)"
+                }
             ));
             let hotkey_error = register_hotkeys(&handle, &settings).err();
             #[cfg(windows)]
@@ -1118,7 +1280,7 @@ fn main() {
                 if let Some(e) = hotkey_error {
                     show_toast(&handle, "error", &t("toast.hotkey"), &e);
                 }
-                start_mic_thread();
+                start_mic_thread(handle.clone());
                 start_status_thread(handle);
             });
             updater::start(app.handle().clone());
@@ -1130,6 +1292,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_locale,
+            open_project_link,
             get_settings,
             get_status,
             list_clips,
@@ -1139,6 +1302,7 @@ fn main() {
             set_replay_enabled,
             list_mics,
             disk_buffer_available,
+            buffer_budget,
             open_clip,
             reveal_clip,
             delete_clip,

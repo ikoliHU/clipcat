@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-buffer-budget"
+description = "Enables the buffer_budget command without any pre-configured scope."
+commands.allow = ["buffer_budget"]
+
+[[permission]]
+identifier = "deny-buffer-budget"
+description = "Denies the buffer_budget command without any pre-configured scope."
+commands.deny = ["buffer_budget"]

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { cx, formatDate, formatDuration, formatSize, gameOf, prettyHotkey } from "../lib/format";
-import { i18n, t } from "../lib/i18n";
+import { i18n, t, useLocale } from "../lib/i18n";
 import { convertFileSrc } from "../lib/tauri";
 import type { Clip } from "../lib/tauri";
 import { getThumb, previewTime, requestThumb, tileKey } from "../lib/thumbs";
@@ -18,6 +18,8 @@ interface Props {
 }
 
 export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen }: Props) {
+  const [page, setPage] = useState(0);
+  const pageSize = 60;
   // Egyszerre legfeljebb egy lejátszó előnézet él, kis késleltetéssel indul
   const [hovered, setHovered] = useState<string | null>(null);
   const hoverTimer = useRef(0);
@@ -26,6 +28,9 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
   // Ha a szűrt játék utolsó klipje is eltűnt, visszaáll az összesre
   const activeFilter = games.includes(filter) ? filter : "";
   const visible = clips.filter((c) => !activeFilter || gameOf(c) === activeFilter);
+  const pages = Math.max(1, Math.ceil(visible.length / pageSize));
+  const currentPage = Math.min(page, pages - 1);
+  const shown = visible.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
 
   const hover = useCallback((key: string | null) => {
     clearTimeout(hoverTimer.current);
@@ -44,6 +49,7 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
       <div className="flex items-baseline gap-3 px-8 pt-[26px] pb-3.5">
         <h1 className="font-display text-[26px] leading-[1.15] font-bold tracking-[-.02em]">{t("gallery.title")}</h1>
         <span className="text-muted tabular">{t("gallery.count", { count: visible.length })}</span>
+        <span className="text-xs text-muted tabular">{formatSize(visible.reduce((bytes, clip) => bytes + clip.size, 0))}</span>
         <span className="flex-1" />
         <Button className="self-center" onClick={onRefresh}>{t("gallery.refresh")}</Button>
       </div>
@@ -52,7 +58,7 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
         {["", ...games].map((game) => (
           <button
             key={game}
-            onClick={() => onFilter(game)}
+            onClick={() => { setPage(0); onFilter(game); hover(null); }}
             className={cx(
               "h-[30px] rounded-full px-3.5 text-[13px] font-medium transition duration-150 active:scale-[.96]",
               game === activeFilter
@@ -68,7 +74,7 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
       <div className="scroll-area flex-1 px-8 pt-1 pb-8">
         {visible.length > 0 ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-x-5 gap-y-6">
-            {visible.map((clip) => {
+            {shown.map((clip) => {
               const key = tileKey(clip);
               return (
                 <Tile key={key} tileKey={key} clip={clip} previewing={hovered === key} onHover={hover} onOpen={open} />
@@ -82,6 +88,11 @@ export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen
           </div>
         )}
       </div>
+      {pages > 1 && <div className="flex items-center justify-center gap-4 border-t border-line px-8 py-3">
+        <Button disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); hover(null); }}>{t("gallery.previous")}</Button>
+        <span className="text-xs text-muted">{t("gallery.page", { current: currentPage + 1, total: pages })}</span>
+        <Button disabled={currentPage + 1 >= pages} onClick={() => { setPage(currentPage + 1); hover(null); }}>{t("gallery.next")}</Button>
+      </div>}
     </section>
   );
 }
@@ -95,13 +106,13 @@ interface TileProps {
 }
 
 const Tile = memo(function Tile({ tileKey: key, clip, previewing, onHover, onOpen }: TileProps) {
+  useLocale();
   const ref = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState(() => getThumb(key));
 
   useEffect(() => {
-    if (thumb) return;
     return requestThumb(key, clip.path, ref.current!, setThumb);
-  }, [key, clip.path, thumb]);
+  }, [key, clip.path]);
 
   return (
     <div

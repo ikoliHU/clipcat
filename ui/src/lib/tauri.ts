@@ -1,11 +1,13 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc as fileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-export { convertFileSrc, invoke, listen };
+export { invoke, listen };
+export const convertFileSrc = (path: string) => fileSrc(path, "clipcat");
 
 // A Rust oldali struktúrák (serde camelCase) tükörképei
 
 export interface Settings {
+  language: "hu" | "en-US";
   outputDir: string;
   bufferSeconds: number;
   bufferStorage: "memory" | "disk";
@@ -34,6 +36,8 @@ export interface Settings {
 export type HotkeyField = "hotkeySave" | "hotkeyRecord" | "hotkeyOpenFolder" | "hotkeyGallery";
 
 export interface Status {
+  encoder: string;
+  bufferSeconds: number;
   obsInstalled: boolean;
   obsRunning: boolean;
   replayEnabled: boolean;
@@ -67,6 +71,7 @@ export interface UpdateState {
 }
 
 export interface Toast {
+  lang: string;
   kind: "ok" | "error" | "pending";
   title: string;
   detail: string;

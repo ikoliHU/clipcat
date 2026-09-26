@@ -1,9 +1,20 @@
 # clipcat
 
+## Nyelv és Infó
+
+A Beállítások **Nyelv** mezője Magyar és English US között vált. Első induláskor a Windows
+megjelenítési nyelve dönt; magyar Windows esetén magyar, minden más esetben English US lesz.
+A mentett kézi választás később megmarad. Mentés után a felület, tálcamenü és értesítések
+újraindítás nélkül váltanak nyelvet.
+
+A beállítások alján az **Infó** rész tartalmazza a verziót, a frissítéskeresést, a licenchivatkozást
+és a GitHub ikont. A repository a [catninth/clipcat](https://github.com/catninth/clipcat).
+A licenc még nincs közzétéve; a gomb az előkészített `main/LICENSE` útvonalra mutat.
+
 ## Kiadás és frissítések
 
 A ClipCat magától keres frissítést (indulás után, majd 6 óránként) a
-`https://github.com/ikoliHU/clipcat/releases/latest/download/latest.json` alapján, és
+`https://github.com/catninth/clipcat/releases/latest/download/latest.json` alapján, és
 kérésre telepíti: Windowson az NSIS-telepítővel, Linuxon az AppImage cseréjével, illetve a
 deb/rpm csomagot `pkexec`-kel telepítve.
 
@@ -30,3 +41,23 @@ npm install
 npx tauri dev    # Vite dev szerver + az alkalmazás
 npx tauri build  # telepítőcsomag
 ```
+
+## Ellenőrzés
+
+```sh
+npm ci
+npm test
+npm run build
+# Windows: a natív tesztekhez is elő kell állítani a konfigurált erőforrásokat.
+powershell -NoProfile -ExecutionPolicy Bypass -File bundle-obs.ps1
+cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/bundle.test.ps1
+node tests/recording-crash.mjs
+```
+
+`npm run preview:ui` külön böngészős tesztfelületet indít a `127.0.0.1:5174` címen.
+A valódi React komponenseket használja szimulált natív válaszokkal; nem indít rögzítést,
+telepítőt, és nem írja át az alkalmazás mentett beállításait.
+
+Az eredeti audit hibáinak reprodukciója, a javítások és a tesztek korlátai:
+[audit-verification.md](docs/audit-verification.md).

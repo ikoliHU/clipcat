@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-replay"
+description = "Enables the save_replay command without any pre-configured scope."
+commands.allow = ["save_replay"]
+
+[[permission]]
+identifier = "deny-save-replay"
+description = "Denies the save_replay command without any pre-configured scope."
+commands.deny = ["save_replay"]

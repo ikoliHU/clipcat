@@ -1,3 +1,30 @@
 fn main() {
-    tauri_build::build()
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            "get_locale",
+            "open_project_link",
+            "get_settings",
+            "get_status",
+            "list_clips",
+            "save_settings",
+            "buffer_budget",
+            "list_mics",
+            "disk_buffer_available",
+            "save_replay",
+            "toggle_record",
+            "set_replay_enabled",
+            "open_clip",
+            "reveal_clip",
+            "delete_clip",
+            "open_output_folder",
+            "pick_folder",
+            "is_ptt_key_supported",
+            "suspend_hotkeys",
+            "resume_hotkeys",
+            "get_update_state",
+            "check_update",
+            "install_update",
+        ])),
+    )
+    .expect("Tauri build");
 }

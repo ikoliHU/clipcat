@@ -30,16 +30,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+. (Join-Path $PSScriptRoot 'scripts\bundle-lib.ps1')
+
+# Official GitHub release asset digest; new versions need a reviewed pin.
+$obsHashes = @{ '32.2.2' = '4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1' }
+if (-not $obsHashes.ContainsKey($Version)) { throw "No reviewed OBS SHA256 for $Version" }
 
 # A lemezes puffer vágója; új verziónál a hash a GitHub release asset "digest" mezőjéből
 $ffmpegVersion = '9.0.1'
 $ffmpegSha256 = 'fec81ae03971d9dd4be3ebe02e263bd2ec1d789483f931bdba5f5715e65da2e9'
 
-$dest = $Dest
+$dest = Assert-BundleDestination $Dest
 $versionFile = Join-Path $dest 'VERSION.txt'
 $versionTag = "$Version+ffmpeg-$ffmpegVersion"
-if (-not $Force -and (Test-Path (Join-Path $dest 'bin\64bit\obs.dll')) -and (Test-Path (Join-Path $dest 'ffmpeg\ffmpeg.exe')) -and
-    (Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $versionTag)) {
+if (-not $Force -and (Test-BundleCache $dest $versionTag)) {
     Write-Host "Rögzítőmotor naprakész (OBS $Version, FFmpeg $ffmpegVersion): $dest"
     exit 0
 }
@@ -57,9 +61,13 @@ $patterns = @(
     'data/libobs/*'
 ) + ($modules | ForEach-Object { "obs-plugins/64bit/$_.dll"; "data/obs-plugins/$_/*" })
 
+$downloadDir = Join-Path $env:TEMP ('clipcat-bundle-' + [guid]::NewGuid().ToString('N'))
+$staging = "$dest.new-$([guid]::NewGuid().ToString('N'))"
+try {
+New-Item -ItemType Directory -Path $downloadDir | Out-Null
 $temp = $null
 if (-not $Zip) {
-    $Zip = Join-Path $env:TEMP "OBS-Studio-$Version-Windows-x64.zip"
+    $Zip = Join-Path $downloadDir "OBS-Studio-$Version-Windows-x64.zip"
     $temp = $Zip
     $url = "https://github.com/obsproject/obs-studio/releases/download/$Version/OBS-Studio-$Version-Windows-x64.zip"
     Write-Host "OBS $Version letöltése (~180 MB)..."
@@ -67,8 +75,7 @@ if (-not $Zip) {
     Invoke-WebRequest -Uri $url -OutFile $Zip -UseBasicParsing
 }
 
-$staging = "$dest.new"
-Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+Assert-ArchiveHash $Zip $obsHashes[$Version]
 $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
 try {
     # A zip gyökere az a mappa, amelyben a bin/64bit/obs.dll van
@@ -81,7 +88,7 @@ try {
         if (-not $entry.Name -or -not $entry.FullName.StartsWith($root)) { continue }
         $relative = $entry.FullName.Substring($root.Length)
         if (-not ($patterns | Where-Object { $relative -like $_ })) { continue }
-        $target = Join-Path $staging ($relative -replace '/', '\')
+        $target = Resolve-BundleTarget $staging $relative
         New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
         $count++
@@ -92,23 +99,14 @@ try {
 
 $ffmpegTemp = $null
 if (-not $FfmpegZip) {
-    $FfmpegZip = Join-Path $env:TEMP "ffmpeg-$ffmpegVersion-essentials_build.zip"
+    $FfmpegZip = Join-Path $downloadDir "ffmpeg-$ffmpegVersion-essentials_build.zip"
     $ffmpegTemp = $FfmpegZip
     $url = "https://github.com/GyanD/codexffmpeg/releases/download/$ffmpegVersion/ffmpeg-$ffmpegVersion-essentials_build.zip"
     Write-Host "FFmpeg $ffmpegVersion letöltése (~110 MB)..."
     $ProgressPreference = 'SilentlyContinue'
     Invoke-WebRequest -Uri $url -OutFile $FfmpegZip -UseBasicParsing
 }
-# Get-FileHash helyett .NET: a CI a pwsh 7 PSModulePath-jával indítja a 5.1-et, ott a cmdlet nem töltődik be
-$sha = [System.Security.Cryptography.SHA256]::Create()
-$stream = [System.IO.File]::OpenRead($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($FfmpegZip))
-try {
-    $hash = -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') })
-} finally {
-    $stream.Dispose()
-    $sha.Dispose()
-}
-if ($hash -ne $ffmpegSha256) { throw "Az ffmpeg zip SHA256-a nem egyezik: $hash" }
+Assert-ArchiveHash $FfmpegZip $ffmpegSha256
 
 # Csak a statikus ffmpeg.exe és a licence kell (GPL, ezért a licenc is a csomagba kerül)
 $archive = [System.IO.Compression.ZipFile]::OpenRead($FfmpegZip)
@@ -135,11 +133,18 @@ foreach ($required in @('bin\64bit\obs.dll', 'bin\64bit\obs-ffmpeg-mux.exe', 'ff
 Set-Content -Path (Join-Path $staging 'VERSION.txt') -Value $versionTag -Encoding ASCII
 
 # Csere csak a sikeres kicsomagolás után, hogy egy megszakadt letöltés ne tegye tönkre a meglévőt
-Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
-Move-Item $staging $dest
-foreach ($file in $temp, $ffmpegTemp) {
-    if ($file) { Remove-Item $file -Force -ErrorAction SilentlyContinue }
+$hashes = [ordered]@{}
+Get-ChildItem -LiteralPath $staging -Recurse -File | ForEach-Object {
+    $relative = $_.FullName.Substring($staging.Length + 1).Replace('\', '/')
+    $hashes[$relative] = Get-Sha256 $_.FullName
 }
-
+$hashes | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $staging 'SHA256SUMS.json') -Encoding UTF8
+$verifiedDest = Assert-BundleDestination $dest
+if (Test-Path -LiteralPath $verifiedDest) { Remove-Item -LiteralPath $verifiedDest -Recurse -Force }
+Move-Item -LiteralPath $staging -Destination $verifiedDest
 $size = (Get-ChildItem $dest -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ("Rögzítőmotor kész: {0} fájl, {1:N1} MB -> {2}" -f $count, $size, $dest) -ForegroundColor Green
+} finally {
+    Remove-BundleTemporaryDirectory $downloadDir $env:TEMP 'clipcat-bundle-'
+    Remove-BundleTemporaryDirectory $staging (Split-Path $dest) 'obs.new-'
+}
