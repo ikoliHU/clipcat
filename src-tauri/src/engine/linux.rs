@@ -1,7 +1,7 @@
-//! Linux: a rendszerre telepített OBS Studio (disztribúciós csomag, a deb/rpm függősége) libobs-a.
-//! X11-en xshm képernyőrögzítés, Waylandon a PipeWire-portál (az első indításkor a rendszer
-//! megkérdezi, melyik képernyőt; a választást a portál visszaállító tokenje megjegyzi).
-//! PulseAudio/PipeWire hang, NVENC vagy VAAPI kódolás. Játékrögzítés (hook) Linuxon nincs.
+//! Linux: libobs from the system OBS Studio installation (distribution package, a deb/rpm dependency).
+//! Uses xshm screen capture on X11 and the PipeWire portal on Wayland (the system asks which screen
+//! to capture on first launch; the portal's restore token remembers the selection).
+//! PulseAudio/PipeWire audio, NVENC or VAAPI encoding. Game capture hooks are unavailable on Linux.
 
 use super::{cs, Api, Data, Layout, Ptr};
 use crate::i18n::tf;
@@ -19,10 +19,10 @@ pub const MIC_SOURCE: &str = "pulse_input_capture";
 const OBS_NIX_PLATFORM_X11_EGL: c_int = 1;
 const OBS_NIX_PLATFORM_WAYLAND: c_int = 2;
 const PIPEWIRE_SOURCE: &str = "pipewire-screen-capture-source";
-/// A PipeWire-portál visszaállító tokenje: ezzel a következő indításkor nem kérdez újra
+/// PipeWire portal restore token: avoids asking again on the next launch
 const RESTORE_TOKEN_FILE: &str = "pipewire-restore-token";
 
-/// A libobs lehetséges helyei: (könyvtármappa, telepítési előtag)
+/// Possible libobs locations: (library directory, installation prefix)
 const LIB_DIRS: &[(&str, &str)] = &[
     ("/usr/lib/x86_64-linux-gnu", "/usr"),
     ("/usr/lib/aarch64-linux-gnu", "/usr"),
@@ -32,12 +32,12 @@ const LIB_DIRS: &[(&str, &str)] = &[
     ("/usr/local/lib64", "/usr/local"),
 ];
 
-/// A képernyőrögzítő forrás azonosítói, az elsőként létrehozhatóval
+/// Screen capture source IDs, using the first one that can be created
 pub fn display_sources() -> &'static [&'static str] {
     if wayland() { &[PIPEWIRE_SOURCE] } else { &["xshm_input_v2", "xshm_input"] }
 }
 
-/// Wayland-munkamenet: a libobs is Waylandon fut, és csak a portálon keresztül rögzíthet képernyőt
+/// Wayland session: libobs also runs on Wayland and can capture the screen only through the portal
 fn wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland")
 }
@@ -55,7 +55,7 @@ pub fn locate() -> Option<Layout> {
     })
 }
 
-/// (modul, kötelező-e)
+/// (module, required)
 pub fn modules() -> Vec<(&'static str, bool)> {
     let capture = if wayland() { "linux-pipewire" } else { "linux-capture" };
     vec![(capture, true), ("linux-pulseaudio", true), ("obs-ffmpeg", true), ("obs-nvenc", false), ("obs-x264", false)]
@@ -70,12 +70,12 @@ pub fn hardware_encoders(hevc: bool) -> &'static [&'static str] {
 }
 
 pub fn open(layout: &Layout) -> Result<Library, String> {
-    // A mentést végző obs-ffmpeg-mux a futó program mellett keresendő (os_get_executable_path);
-    // a disztribúciós OBS és a ClipCat csomag egyaránt a /usr/bin-be telepít.
+    // The obs-ffmpeg-mux used for saving must be next to the running program (os_get_executable_path);
+    // both the distribution's OBS package and ClipCat install into /usr/bin.
     unsafe { Library::new(&layout.lib) }.map_err(|e| tf("engine.dllLoad", &[("error", &e)]))
 }
 
-/// A lemezes puffer vágója: a rendszer ffmpeg-je (a deb/rpm függősége)
+/// Disk buffer trimmer: the system ffmpeg (a deb/rpm dependency)
 pub fn ffmpeg() -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
@@ -84,14 +84,14 @@ pub fn ffmpeg() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// Linuxon nincs kötelező zárolás; a hívó előtte már várt a lezárásra.
+/// Linux has no mandatory locking; the caller has already waited for finalization.
 pub fn file_closed(_path: &std::path::Path) -> bool {
     true
 }
 
 pub fn hide_console(_cmd: &mut std::process::Command) {}
 
-/// A libobs grafikus rétege a startup előtt tudni akarja, milyen kijelzőszerveren fut.
+/// The libobs graphics layer needs to know the display server type before startup.
 pub fn before_startup(lib: &Library) -> Result<(), String> {
     unsafe {
         let set_platform: libloading::Symbol<unsafe extern "C" fn(c_int)> =
@@ -109,15 +109,15 @@ pub fn before_startup(lib: &Library) -> Result<(), String> {
     Ok(())
 }
 
-/// Saját kapcsolat a kijelzőszerverhez (XOpenDisplay / wl_display_connect a NULL alapértelmezéssel);
-/// a folyamat végéig nyitva marad.
+/// A dedicated connection to the display server (XOpenDisplay / wl_display_connect with the NULL default);
+/// it stays open for the lifetime of the process.
 unsafe fn open_display(lib_name: &str, symbol: &[u8]) -> Result<Ptr, String> {
     let lib = Library::new(lib_name).map_err(|e| e.to_string())?;
     let connect: libloading::Symbol<unsafe extern "C" fn(*const c_char) -> Ptr> = lib.get(symbol).map_err(|e| e.to_string())?;
     let display = connect(std::ptr::null());
     std::mem::forget(lib);
     if display.is_null() {
-        Err(format!("{lib_name}: a kijelzőszerver nem érhető el"))
+        Err(format!("{lib_name}: display server is unavailable"))
     } else {
         Ok(display)
     }
@@ -140,7 +140,7 @@ pub fn game_settings(data: Data) -> Data {
     data
 }
 
-/// A portál által adott visszaállító token mentése a következő indításhoz.
+/// Save the portal's restore token for the next launch.
 pub fn persist_display(api: &Api, display: Ptr) {
     if !wayland() || display.is_null() {
         return;
@@ -167,7 +167,7 @@ extern "C" {
     fn libc_vsnprintf(buffer: *mut c_char, size: usize, format: *const c_char, args: Ptr) -> c_int;
 }
 
-/// A libobs printf-stílusú naplóüzenetének kifejtése (a va_list mutatóként érkezik)
+/// Expand a libobs printf-style log message (va_list is passed as a pointer)
 pub unsafe fn vsnprintf(buffer: &mut [c_char], format: *const c_char, args: Ptr) {
     libc_vsnprintf(buffer.as_mut_ptr(), buffer.len(), format, args);
 }

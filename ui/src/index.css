@@ -3,7 +3,7 @@
 @custom-variant reduce-transparency (@media (prefers-reduced-transparency: reduce));
 
 @theme {
-  /* Felületek: a sötétebb anyag szerkezetet ad (oldalsáv), a világosabb interakciót (vezérlők) */
+  /* Surfaces: darker material provides structure (sidebar), lighter material marks interactions (controls) */
   --color-canvas: #121214;
   --color-sidebar: #18181b;
   --color-panel: #1f1f23;
@@ -27,7 +27,7 @@
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
 
-  /* Kritikusan csillapított rugó közelítése: gyors indulás, túllövés nélküli beállás */
+  /* Approximate a critically damped spring: fast start, settling without overshoot */
   --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 
   --animate-view-in: view-in 250ms var(--ease-spring);
@@ -40,7 +40,7 @@
   @keyframes bar-in {
     from { opacity: 0; transform: translateY(12px); }
   }
-  /* Az értesítés ugyanazon az úton távozik, amelyen érkezett */
+  /* The notification leaves along the same path it entered */
   @keyframes toast {
     0% { opacity: 0; transform: translateX(24px); }
     8%, 85% { opacity: 1; transform: translateX(0); }
@@ -60,7 +60,7 @@
     user-select: none;
     color-scheme: dark;
   }
-  /* Az értesítés ablaka átlátszó, csak a kártya látszik */
+  /* The notification window is transparent; only the card is visible */
   html.toast body {
     background: transparent;
     overflow: hidden;
@@ -85,7 +85,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Görgetési él: kemény elválasztó helyett finom kifutás a fejléc alatt */
+/* Scroll edge: a subtle fade below the header instead of a hard divider */
 @utility scroll-area {
   overflow-y: auto;
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
@@ -100,7 +100,7 @@
   &::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.24); }
 }
 
-/* ---------- Akadálymentesség ---------- */
+/* ---------- Accessibility ---------- */
 
 @keyframes fade {
   from { opacity: 0; }

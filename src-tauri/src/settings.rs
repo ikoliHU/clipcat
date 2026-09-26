@@ -8,21 +8,21 @@ pub struct Settings {
     pub language: String,
     pub output_dir: String,
     pub buffer_seconds: u32,
-    /// "memory" (RAM) vagy "disk" (darabok a `buffer_dir` mappában)
+    /// "memory" (RAM) or "disk" (segments in `buffer_dir`)
     pub buffer_storage: String,
     pub buffer_dir: String,
-    /// "native" vagy "SZÉLESSÉGxMAGASSÁG"
+    /// "native" or "WIDTHxHEIGHT"
     pub resolution: String,
     pub fps: u32,
     pub bitrate_mbps: u32,
-    /// "h264" vagy "hevc"
+    /// "h264" or "hevc"
     pub codec: String,
     pub capture_desktop: bool,
-    /// "off", "ptt" vagy "always"
+    /// "off", "ptt", or "always"
     pub mic_mode: String,
-    /// A hangrendszer eszközazonosítója; "default" = a rendszer alapértelmezett mikrofonja
+    /// Audio system device ID; "default" = the system's default microphone
     pub mic_device: String,
-    /// Windows virtuális billentyűkód (a felület KeyboardEvent.keyCode-ja; 0x04-0x06: középső/oldalsó egérgombok)
+    /// Windows virtual-key code (the UI's KeyboardEvent.keyCode; 0x04-0x06: middle/side mouse buttons)
     pub mic_ptt_vk: u32,
     pub mic_ptt_label: String,
     pub hotkey_save: String,
@@ -33,8 +33,8 @@ pub struct Settings {
     pub notification_sound: bool,
     pub autostart: bool,
     pub keep_obs_running: bool,
-    /// A visszajátszás a legutóbb bekapcsolva maradt-e. Tiszta telepítésnél ki van kapcsolva,
-    /// a mező nélküli (régebbi) beállításfájlnál viszont be.
+    /// Whether replay was left enabled last time. Disabled on a clean install,
+    /// but enabled for older settings files without this field.
     #[serde(default = "enabled")]
     pub replay_enabled: bool,
     pub last_clip: Option<String>,
@@ -67,7 +67,7 @@ impl Default for Settings {
             capture_desktop: true,
             mic_mode: "off".into(),
             mic_device: "default".into(),
-            // A régi ShadowPlay push-to-talk gombja (VK_OEM_3, magyar billentyűzeten "ö")
+            // Legacy ShadowPlay push-to-talk key (VK_OEM_3, "ö" on a Hungarian keyboard)
             mic_ptt_vk: 0xC0,
             mic_ptt_label: "ö".into(),
             hotkey_save: "Alt+F10".into(),
@@ -85,8 +85,8 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// A rögzítési láncot érintő mezők; ha ezek változnak, a puffert újra kell építeni
-    /// (a tartalma elvész). Az asztal rögzítése és a mikrofon azonnal, újraépítés nélkül változik.
+    /// Fields affecting the recording pipeline; changing these requires rebuilding the buffer
+    /// (discarding its contents). Desktop capture and microphone settings change immediately without a rebuild.
     pub fn pipeline_fingerprint(&self) -> String {
         format!(
             "{}|{}|{}|{}|{}|{}|{}|{}",
@@ -148,8 +148,8 @@ impl Settings {
 
 pub const MIN_BITRATE_MBPS: u32 = 5;
 
-/// A képkockasebességhez tartozó legnagyobb bitráta; alacsony FPS-nél ennél többől már nem
-/// lesz szebb a kép, csak nagyobb a fájl. A felület (ui/app.js) ugyanezt a táblát használja.
+/// Maximum bitrate for the frame rate; at low FPS, higher values only increase file size,
+/// not image quality. The UI (ui/app.js) uses the same table.
 pub fn max_bitrate_mbps(fps: u32) -> u32 {
     match fps {
         0..=30 => 80,
@@ -159,7 +159,7 @@ pub fn max_bitrate_mbps(fps: u32) -> u32 {
     }
 }
 
-/// Bármely billentyű vagy egérgomb jó, kivéve a bal és jobb egérgombot.
+/// Any key or mouse button is allowed except the left and right mouse buttons.
 pub fn is_ptt_key_supported(vk: u32) -> bool {
     (0x03..=0xFE).contains(&vk)
 }
@@ -225,7 +225,7 @@ fn save_to(settings: &Settings, path: &std::path::Path) -> std::io::Result<()> {
     static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let json = serde_json::to_string_pretty(settings).map_err(std::io::Error::other)?;
-    // Előbb ideiglenes fájlba ír, így egy félbeszakadt mentés nem teszi tönkre a beállításokat
+    // Write to a temporary file first so an interrupted save cannot corrupt the settings
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

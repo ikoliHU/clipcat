@@ -30,7 +30,7 @@ it("preserves a valid 5 Mbps setting when another preference is saved (audit 18)
   render(<SettingsView settings={settings} onSaved={vi.fn()} onStatus={vi.fn()} update={null} />);
   await screen.findByText("5 Mbps");
   fireEvent.click(screen.getAllByRole("checkbox")[0]);
-  fireEvent.click(screen.getByRole("button", { name: "Mentés" }));
+  fireEvent.click(screen.getByRole("button", { name: hu["settings.save"] }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_settings", {
     settings: expect.objectContaining({ bitrateMbps: 5 }),
   }));
@@ -51,7 +51,7 @@ it("saves English US and updates all visible settings without restarting", async
   const language = await screen.findByRole("combobox", { name: hu["settings.language.label"] });
   expect([...language.querySelectorAll("option")].map(o => o.textContent)).toEqual(["Magyar", "English US"]);
   fireEvent.change(language, { target: { value: "en-US" } });
-  fireEvent.click(screen.getByRole("button", { name: "Mentés" }));
+  fireEvent.click(screen.getByRole("button", { name: hu["settings.save"] }));
   await screen.findByRole("heading", { name: "Settings" });
   expect(saved.language).toBe("en-US");
   expect(document.documentElement.lang).toBe("en-US");

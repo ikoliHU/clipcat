@@ -1,4 +1,4 @@
-# Változásnapló
+# Changelog
 
 ## 0.6.0 – 2026-09-26
 
@@ -12,28 +12,28 @@
 
 ## 0.5.0 – 2026-09-26
 
-### Újdonságok
+### Added
 
-- Magyar és English US fordítás, a Windows megjelenítési nyelvét követő kezdeti választással.
-- Infó-szekció a beállítások alján: frissítéskeresés, licenchivatkozás és GitHub ikon.
+- Hungarian and English US translations, with the initial selection based on the Windows display language.
+- Info section at the bottom of Settings: update check, license link, and GitHub icon.
 
-### Javítva
+### Fixed
 
-- Lemezes mentés határideje, szegmensvédelem, munkamenet-azonosítás, tárhely- és RAM-korlátok.
-- Rögzítőmotor és mikrofon életciklusának javítása; hardveres kódolóhibánál működő fallback.
-- Beállításvalidálás és sorosított mentés; aktív felvétel védelme átállítás és frissítés közben.
-- Fragmentált MP4 kézi felvételnél; lezárási hibák jelzése és részleges fájlok megőrzése.
-- Szűkített IPC/CSP/fájlhozzáférés, ellenőrzött OBS-csomagolás és GLib biztonsági backport.
-- Gyorsbillentyű-rögzítés megszakítása, lapozható galéria, korlátozott előnézet-cache és naplózás.
-- A CI és a kiadási workflow a natív tesztek előtt elkészíti a beágyazott felületet.
+- Disk save timeout, segment protection, session identification, storage and RAM limits.
+- Recording engine and microphone lifecycle; working fallback after hardware encoder failures.
+- Settings validation and serialized saving; protection for active recordings during reconfiguration and updates.
+- Fragmented MP4 for manual recordings; finalization error reporting and preservation of partial files.
+- Restricted IPC/CSP/file access, verified OBS packaging, and a GLib security backport.
+- Hotkey capture cancellation, paginated gallery, bounded thumbnail cache and logging.
+- CI and release workflows build the embedded UI before running native tests.
 
-### Ellenőrzés
+### Verification
 
-- Regressziós tesztek és audit-bizonyítás: `docs/audit-verification.md`.
+- Regression tests and audit evidence: `docs/audit-verification.md`.
 
 ## 0.4.1 – 2026-09-21
 
-### Javítva
+### Fixed
 
-- A gyorsbillentyűk mostantól olyan játékok fókuszában is működnek, amelyek elnyelik a Windows globális gyorsbillentyű-eseményeit, például a League of Legends keret nélküli módjában.
-- A natív és a tartalék billentyűfigyelés közötti duplikált műveletek megelőzése.
+- Hotkeys now work while games that swallow Windows global hotkey events have focus, such as League of Legends in borderless mode.
+- Prevent duplicate actions between native hotkey events and fallback key polling.

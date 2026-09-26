@@ -3,7 +3,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// A főablak (index.html) és az értesítés (toast.html) külön oldal, közös forrásból
+// The main window (index.html) and notification (toast.html) are separate pages sharing the same source
 export default defineConfig({
   root: "ui",
   plugins: [react(), tailwindcss()],

@@ -42,7 +42,7 @@ const RECOVER_COOLDOWN: Duration = Duration::from_secs(20);
 const PTT_RELEASE_DELAY: Duration = Duration::from_millis(200);
 const HOTKEY_DEBOUNCE: Duration = Duration::from_millis(250);
 
-/// A push-to-talk szál ezekből olvas, hogy ne kelljen zárat vennie.
+/// The push-to-talk thread reads these values without acquiring a lock.
 static MIC_MODE: AtomicU32 = AtomicU32::new(MIC_OFF);
 static PTT_VK: AtomicU32 = AtomicU32::new(0);
 const MIC_OFF: u32 = 0;
@@ -56,10 +56,10 @@ struct Status {
     obs_running: bool,
     replay_enabled: bool,
     replay_active: bool,
-    /// A puffer utolsó ürítése (Unix ms), 0 ha nem fut
+    /// Last buffer clear (Unix ms), or 0 if not running
     buffer_since: u64,
     recording: bool,
-    /// A kézi felvétel kezdete (Unix ms), 0 ha nem fut
+    /// Manual recording start (Unix ms), or 0 if not running
     recording_since: u64,
     error: Option<String>,
     encoder: String,
@@ -84,14 +84,14 @@ struct AppState {
     selected_folders: Mutex<HashSet<PathBuf>>,
     status: Mutex<Status>,
     shortcuts: Mutex<Vec<(Shortcut, Action)>>,
-    /// A natív és a polling gyorsbillentyű-esemény ugyanazt a lenyomást ne futtassa kétszer.
+    /// Prevent native and polling hotkey events from executing the same keypress twice.
     last_shortcut: Mutex<[Option<Instant>; 4]>,
-    /// A tálcamenü állapotfüggő elemei: (felvétel, visszajátszás)
+    /// State-dependent tray menu items: (recording, replay)
     tray_items: Mutex<Option<(MenuItem<Wry>, MenuItem<Wry>)>>,
     tray_labels: Mutex<Vec<(MenuItem<Wry>, &'static str)>>,
     engine: Mutex<Option<Engine>>,
     engine_error: Mutex<Option<String>>,
-    /// A mentés kérésekor előtérben lévő játék mappája (a mentés csak később készül el)
+    /// Folder for the foreground game when saving was requested (the save completes later)
     pending_folder: Mutex<Option<String>>,
     last_recover: Mutex<Option<Instant>>,
     quitting: AtomicBool,
@@ -115,7 +115,7 @@ fn pretty_hotkey(hotkey: &str) -> String {
         .join("+")
 }
 
-// ---------- Rögzítőmotor ----------
+// ---------- Recording engine ----------
 
 fn engine_config(s: &Settings) -> engine::Config {
     let monitor = platform::primary_monitor();
@@ -125,10 +125,10 @@ fn engine_config(s: &Settings) -> engine::Config {
     } else {
         settings::parse_resolution(&s.resolution).unwrap_or((1920, 1080))
     };
-    // Ffmpeg nélkül (pl. sérült telepítés) a memóriás puffer marad, hogy a mentés működjön
+    // Without ffmpeg (e.g. a damaged installation), use the memory buffer so saving still works
     let disk = s.buffer_storage == "disk";
     if disk && !engine::disk_buffer_available() {
-        logfile::write("Lemezes puffer beállítva, de nincs ffmpeg: memóriás puffer");
+        logfile::write("Disk buffer configured, but ffmpeg is missing: using memory buffer");
     }
     engine::Config {
         output_dir: s.output_dir.clone(),
@@ -156,7 +156,7 @@ fn apply_mic_settings(s: &Settings) {
     MIC_MODE.store(mode, Ordering::SeqCst);
 }
 
-/// Push-to-talk: a mikrofon csak a gomb nyomva tartása alatt (és utána egy kis ideig) szól.
+/// Push-to-talk: the microphone is audible only while the key is held and briefly afterward.
 fn start_mic_thread(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_pressed = Instant::now() - PTT_RELEASE_DELAY;
@@ -198,7 +198,7 @@ fn start_engine(app: &AppHandle) {
             *st.engine_error.lock().unwrap() = None;
         }
         Err(e) => {
-            logfile::write(&format!("A rögzítőmotor nem indult: {e}"));
+            logfile::write(&format!("Recording engine failed to start: {e}"));
             *st.engine_error.lock().unwrap() = Some(e.clone());
             show_toast(app, "error", &t("toast.captureNotStarted"), &e);
         }
@@ -216,13 +216,13 @@ fn on_engine_event(app: &AppHandle, event: engine::Event) {
                 finish_save(&app, PathBuf::from(path));
             });
         }
-        // A motor zárolása alatt érkezik, ezért külön szálon dolgozzuk fel
+        // Arrives while the engine is locked, so handle it on a separate thread
         engine::Event::Recorded(path) => {
             let app = app.clone();
             std::thread::spawn(move || finish_recording(&app, PathBuf::from(path)));
         }
         engine::Event::RecordingFailed(code) => {
-            logfile::write(&format!("A felvétel hiba miatt leállt, kód: {code}"));
+            logfile::write(&format!("Recording stopped due to an error, code: {code}"));
             show_toast(
                 app,
                 "error",
@@ -236,31 +236,31 @@ fn on_engine_event(app: &AppHandle, event: engine::Event) {
         }
         engine::Event::SaveFailed(e) => {
             state(app).save_in_progress.store(false, Ordering::SeqCst);
-            logfile::write(&format!("Mentés sikertelen: {e}"));
+            logfile::write(&format!("Save failed: {e}"));
             show_toast(app, "error", &t("toast.saveFailed"), &e);
         }
         engine::Event::Stopped(code) if code != 0 => {
-            logfile::write(&format!("A rögzítés leállt, kód: {code}"));
+            logfile::write(&format!("Capture stopped, code: {code}"));
             show_toast(app, "error", &t("toast.captureStopped"), &t("status.restarting"));
         }
         engine::Event::Stopped(_) => {}
     }
 }
 
-/// Mentés után üríti a puffert, így a következő klip nem ismétli meg a most mentett részt.
+/// Clear the buffer after saving so the next clip does not repeat the footage just saved.
 fn clear_buffer(app: &AppHandle) {
     let st = state(app);
     let operation = st.operations.lock().unwrap();
     if let Some(engine) = state(app).engine.lock().unwrap().as_mut() {
         if let Err(e) = engine.clear_replay() {
-            logfile::write(&format!("A puffer nem üríthető: {e}"));
+            logfile::write(&format!("Cannot clear the buffer: {e}"));
         }
     }
     drop(operation);
     refresh_status(app);
 }
 
-/// ShadowPlay-szerű, még nem létező fájlnév a játék mappájában.
+/// A ShadowPlay-style filename that does not yet exist in the game folder.
 fn clip_path(app: &AppHandle, folder: &str, ext: &str) -> PathBuf {
     let dir = PathBuf::from(current_settings(app).output_dir).join(folder);
     let _ = std::fs::create_dir_all(&dir);
@@ -274,7 +274,7 @@ fn clip_path(app: &AppHandle, folder: &str, ext: &str) -> PathBuf {
     target
 }
 
-/// A mentett klipet a játék mappájába helyezi, ShadowPlay-szerű névvel.
+/// Move the saved clip into the game folder with a ShadowPlay-style name.
 fn finish_save(app: &AppHandle, src: PathBuf) {
     let folder = state(app)
         .pending_folder
@@ -285,7 +285,7 @@ fn finish_save(app: &AppHandle, src: PathBuf) {
     let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_string();
     let target = clip_path(app, &folder, &ext);
 
-    // A muxer épp most zárta le a fájlt; ha még fogja, kicsit várunk
+    // The muxer has just finalized the file; wait briefly if it still holds the file open
     let mut moved = false;
     for _ in 0..40 {
         if std::fs::rename(&src, &target).is_ok() {
@@ -316,7 +316,7 @@ fn finish_recording(app: &AppHandle, path: PathBuf) {
     refresh_status(app);
 }
 
-/// Legutóbbi klipként megjegyzi, frissíti a galériát és értesítést mutat.
+/// Remember this as the latest clip, refresh the gallery, and show a notification.
 fn announce_clip(app: &AppHandle, path: &Path, folder: &str, title: &str, note: Option<String>) {
     let st = state(app);
     let operation = st.operations.lock().unwrap();
@@ -357,7 +357,7 @@ fn refresh_status(app: &AppHandle) {
     };
     let mut snap = snapshot();
 
-    // Ha a puffer hiba miatt leállt (és nem kézzel állították le), újraindítjuk (nem túl sűrűn)
+    // Restart the buffer if an error stopped it (not a manual stop), with a delay between attempts
     let recover = st.settings.lock().unwrap().keep_obs_running;
     if snap.is_some_and(|(enabled, active, ..)| enabled && !active)
         && recover
@@ -370,7 +370,7 @@ fn refresh_status(app: &AppHandle) {
             drop(last);
             if let Some(engine) = st.engine.lock().unwrap().as_mut() {
                 if let Err(e) = engine.restart() {
-                    logfile::write(&format!("Újraindítás sikertelen: {e}"));
+                    logfile::write(&format!("Restart failed: {e}"));
                     *st.engine_error.lock().unwrap() = Some(e);
                 } else {
                     *st.engine_error.lock().unwrap() = None;
@@ -418,7 +418,7 @@ fn start_status_thread(app: AppHandle) {
     });
 }
 
-// ---------- Műveletek ----------
+// ---------- Actions ----------
 
 fn request_save(app: &AppHandle) -> Result<(), String> {
     let st = state(app);
@@ -447,14 +447,14 @@ fn request_save(app: &AppHandle) -> Result<(), String> {
     match &result {
         Ok(folder) => show_toast(app, "pending", &t("toast.clipSaving"), folder),
         Err(e) => {
-            logfile::write(&format!("Mentés sikertelen: {e}"));
+            logfile::write(&format!("Save failed: {e}"));
             show_toast(app, "error", &t("toast.saveFailed"), e);
         }
     }
     result.map(|_| ())
 }
 
-/// Kézi felvétel indítása vagy leállítása (a leállítás a fájl lezárásáig tart, ezért nem a fő szálon fut).
+/// Start or stop manual recording (stopping waits for file finalization, so it runs off the main thread).
 fn toggle_recording(app: &AppHandle) {
     let st = state(app);
     let operation = st.operations.lock().unwrap();
@@ -466,7 +466,7 @@ fn toggle_recording(app: &AppHandle) {
         match engine.as_mut() {
             None => Err(t("error.engineNotRunning")),
             Some(e) if e.recording_active() => {
-                // A leállítás a fájl lezárásáig tart, ezért előtte jelezzük, hogy a mentés elkezdődött
+                // Stopping waits for file finalization, so signal that saving has started first
                 show_toast(app, "pending", &t("toast.recordingSaving"), "");
                 e.stop_recording().map(|()| None)
             }
@@ -489,7 +489,7 @@ fn toggle_recording(app: &AppHandle) {
         }
         Ok(None) => {}
         Err(e) => {
-            logfile::write(&format!("Felvétel sikertelen: {e}"));
+            logfile::write(&format!("Recording failed: {e}"));
             show_toast(app, "error", &t("toast.recordFailed"), &e);
         }
     }
@@ -497,7 +497,7 @@ fn toggle_recording(app: &AppHandle) {
     refresh_status(app);
 }
 
-/// A választást megjegyzi: a következő indításkor is így indul.
+/// Remember the choice and apply it on the next launch.
 fn set_replay(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let st = state(app);
     let operation = st.operations.lock().unwrap();
@@ -517,13 +517,13 @@ fn set_replay(app: &AppHandle, enabled: bool) -> Result<(), String> {
             s.replay_enabled = enabled;
         }
         if let Err(e) = settings::save(&s) {
-            logfile::write(&format!("A visszajátszás állapota nem menthető: {e}"));
+            logfile::write(&format!("Cannot save replay state: {e}"));
         }
     }
     logfile::write(&format!(
-        "Visszajátszás {}{}",
-        if enabled { "elindítva" } else { "leállítva" },
-        result.as_ref().err().map_or(String::new(), |e| format!(" – hiba: {e}"))
+        "Replay {}{}",
+        if enabled { "started" } else { "stopped" },
+        result.as_ref().err().map_or(String::new(), |e| format!(" – error: {e}"))
     ));
     drop(operation);
     refresh_status(app);
@@ -549,10 +549,10 @@ fn show_main(app: &AppHandle, view: &str) {
 
 fn run_action(app: &AppHandle, action: Action) {
     logfile::write(match action {
-        Action::Save => "Művelet: mentés",
-        Action::Record => "Művelet: felvétel",
-        Action::OpenFolder => "Művelet: mappa megnyitása",
-        Action::Gallery => "Művelet: galéria",
+        Action::Save => "Action: save",
+        Action::Record => "Action: record",
+        Action::OpenFolder => "Action: open folder",
+        Action::Gallery => "Action: gallery",
     });
     match action {
         Action::Save => {
@@ -585,9 +585,9 @@ fn run_shortcut_action(app: &AppHandle, action: Action) -> bool {
     true
 }
 
-/// Néhány játék (pl. League of Legends) fókuszban elnyeli a WM_HOTKEY eseményt.
-/// Windowson a fizikai billentyűállapotot is figyeljük; az élváltás és a debounce
-/// megakadályozza az ismétlést, ha a natív esemény is megérkezik.
+/// Some games (e.g. League of Legends) swallow WM_HOTKEY events while focused.
+/// On Windows, also poll physical key states; edge detection and debouncing
+/// prevent duplicate actions if the native event arrives as well.
 #[cfg(windows)]
 fn start_hotkey_fallback(app: AppHandle) {
     std::thread::spawn(move || {
@@ -599,7 +599,7 @@ fn start_hotkey_fallback(app: AppHandle) {
                 if platform::shortcut_down(&shortcut) {
                     if down.insert(shortcut) && run_shortcut_action(&app, action) {
                         logfile::write(&format!(
-                            "Gyorsbillentyű polling fallback: {}",
+                            "Hotkey polling fallback: {}",
                             pretty_hotkey(&shortcut.into_string())
                         ));
                     }
@@ -612,7 +612,7 @@ fn start_hotkey_fallback(app: AppHandle) {
     });
 }
 
-/// Leállítja a rögzítőmotort (kilépéskor és frissítés telepítése előtt).
+/// Shut down the recording engine (on exit and before installing an update).
 fn stop_engine(app: &AppHandle) {
     let st = state(app);
     let _operation = st.operations.lock().unwrap();
@@ -628,7 +628,7 @@ fn quit(app: &AppHandle) {
     app.exit(0);
 }
 
-// ---------- Értesítés ----------
+// ---------- Notification ----------
 
 fn show_toast(app: &AppHandle, kind: &str, title: &str, detail: &str) {
     let st = state(app);
@@ -636,7 +636,7 @@ fn show_toast(app: &AppHandle, kind: &str, title: &str, detail: &str) {
         let s = st.settings.lock().unwrap();
         (s.show_notification || kind == "error", s.notification_sound)
     };
-    // A folyamatban lévő mentés nem sípol, csak a végeredmény
+    // Play a sound only for the final result, not while a save is in progress
     if sound && kind != "pending" {
         platform::beep(kind == "error");
     }
@@ -663,7 +663,7 @@ fn show_toast(app: &AppHandle, kind: &str, title: &str, detail: &str) {
     });
 }
 
-// ---------- Gyorsbillentyűk, automatikus indítás ----------
+// ---------- Hotkeys, autostart ----------
 
 fn parse_hotkeys(s: &Settings) -> Result<Vec<(Shortcut, Action)>, String> {
     let mut list: Vec<(Shortcut, Action)> = Vec::new();
@@ -687,7 +687,7 @@ fn parse_hotkeys(s: &Settings) -> Result<Vec<(Shortcut, Action)>, String> {
     Ok(list)
 }
 
-/// Regisztrálja a gyorsbillentyűket; amelyiket más program foglalja, azt kihagyja és jelzi.
+/// Register hotkeys; skip and report any already claimed by another program.
 fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
     let list = parse_hotkeys(s)?;
     let gs = app.global_shortcut();
@@ -700,7 +700,7 @@ fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
     }
     *state(app).shortcuts.lock().unwrap() = list;
     logfile::write(&format!(
-        "Gyorsbillentyűk: mentés={} felvétel={} mappa={} galéria={}{}",
+        "Hotkeys: save={} record={} folder={} gallery={}{}",
         pretty_hotkey(&s.hotkey_save),
         pretty_hotkey(&s.hotkey_record),
         pretty_hotkey(&s.hotkey_open_folder),
@@ -708,7 +708,7 @@ fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
         if failed.is_empty() {
             String::new()
         } else {
-            format!(" | NEM sikerült: {}", failed.join(", "))
+            format!(" | FAILED: {}", failed.join(", "))
         }
     ));
     if failed.is_empty() {
@@ -719,7 +719,7 @@ fn register_hotkeys(app: &AppHandle, s: &Settings) -> Result<(), String> {
     }
 }
 
-// ---------- Tálca ----------
+// ---------- Tray ----------
 
 fn update_tray(app: &AppHandle, status: &Status) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
@@ -825,14 +825,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-// ---------- Parancsok a felületnek ----------
+// ---------- Frontend commands ----------
 
-/// A felület csak a mentési mappán belüli fájlokhoz nyúlhat.
+/// The UI may access only files inside the output folder.
 fn clip_in_output_dir(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     clips::checked_path(Path::new(&current_settings(app).output_dir), Path::new(path))
 }
 
-/// Az aktív nyelv kódja és szövegei a felületnek
+/// Active language code and messages for the UI
 #[tauri::command]
 fn get_locale() -> serde_json::Value {
     json!({ "lang": i18n::lang(), "messages": i18n::messages() })
@@ -869,7 +869,7 @@ async fn list_clips(app: AppHandle) -> Vec<Clip> {
         .unwrap_or_default()
 }
 
-/// Menti a beállításokat; figyelmeztetéssel tér vissza, ha valami csak részben sikerült.
+/// Save settings; return a warning if an operation succeeds only partially.
 #[tauri::command]
 async fn save_settings(app: AppHandle, settings: Settings) -> Result<String, String> {
     let handle = app.clone();
@@ -1054,7 +1054,7 @@ fn is_ptt_key_supported(vk: u32) -> bool {
     settings::is_ptt_key_supported(vk)
 }
 
-/// Gyorsbillentyű-rögzítés közben a meglévők ne süljenek el.
+/// Do not trigger existing hotkeys while capturing a new one.
 #[tauri::command]
 fn suspend_hotkeys(app: AppHandle) {
     if !app
@@ -1098,18 +1098,18 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     updater::install(&app).await
 }
 
-// ---------- Önteszt ----------
+// ---------- Self-test ----------
 
-/// `ClipCat.exe --selftest <mappa> [másodperc]`: felület nélkül elindítja a motort, a megadott idő
-/// (alapból 8 s) után ment, és az eredményt a mappába írja (selftest.txt). A normál példánytól
-/// függetlenül fut.
+/// `ClipCat.exe --selftest <folder> [seconds]`: start the engine without the UI, save after the specified
+/// duration (8 s by default), and write the result to selftest.txt in the folder. Runs independently
+/// of the normal application instance.
 fn run_selftest(dir: &str, seconds: u64) -> i32 {
     logfile::init("selftest.log");
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = Mutex::new(tx);
     engine::set_event_handler(move |event| {
         let result = match event {
-            engine::Event::Saved(path) => path.ok_or_else(|| "a mentett fájl útvonala nem elérhető".to_string()),
+            engine::Event::Saved(path) => path.ok_or_else(|| "saved file path is unavailable".to_string()),
             engine::Event::SaveFailed(e) => Err(e),
             _ => return,
         };
@@ -1120,13 +1120,13 @@ fn run_selftest(dir: &str, seconds: u64) -> i32 {
     let report = |text: String| {
         let _ = std::fs::create_dir_all(dir);
         let _ = std::fs::write(Path::new(dir).join("selftest.txt"), &text);
-        logfile::write(&format!("Önteszt: {text}"));
+        logfile::write(&format!("Self-test: {text}"));
     };
 
     let mut engine = match Engine::start(&engine_config(&s), true) {
         Ok(engine) => engine,
         Err(e) => {
-            report(format!("HIBA indítás: {e}"));
+            report(format!("ERROR startup: {e}"));
             return 1;
         }
     };
@@ -1134,24 +1134,24 @@ fn run_selftest(dir: &str, seconds: u64) -> i32 {
     let active = engine.replay_active();
     let result = engine.save().and_then(|_| {
         rx.recv_timeout(Duration::from_secs(30))
-            .map_err(|_| "nem jött mentési jelzés".to_string())?
+            .map_err(|_| "no save signal received".to_string())?
     });
     engine.shutdown();
     match result {
         Ok(path) => {
-            report(format!("OK aktív={active} fájl={path}"));
+            report(format!("OK active={active} file={path}"));
             0
         }
         Err(e) => {
-            report(format!("HIBA aktív={active}: {e}"));
+            report(format!("ERROR active={active}: {e}"));
             1
         }
     }
 }
 
-// ---------- Indítás ----------
+// ---------- Startup ----------
 
-/// Összeomláskor a hibaüzenet a crash.log-ba kerül (az exe-nek nincs konzolja).
+/// On a crash, write the error message to crash.log (the exe has no console).
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let text = format!("{} {info}\n", platform::local_time("%Y.%m.%d %H:%M:%S"));
@@ -1172,8 +1172,8 @@ fn main() {
 
     i18n::set_language(&settings.language);
 
-    // Az állapotot a Builderen kell regisztrálni: a konfigurációban megadott ablakok a setup előtt
-    // jönnek létre, és a felület JavaScriptje gyors betöltésnél már a setup előtt parancsokat hív.
+    // Register state on the Builder: configured windows are created before setup, and if the frontend
+    // loads quickly, its JavaScript may invoke commands before setup runs.
     tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("clipcat", |context, request, responder| {
             let app = context.app_handle().clone();
@@ -1183,7 +1183,7 @@ fn main() {
                 responder.respond(media::response(&root, request, allowed));
             });
         })
-        // A webview alapértelmezett helyi menüje (Vissza, Frissítés, Vizsgálat…) sehol ne jelenjen meg
+        // Suppress the webview's default context menu (Back, Reload, Inspect…) everywhere
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 let _ = webview.eval("document.addEventListener('contextmenu', e => e.preventDefault());");
@@ -1218,7 +1218,7 @@ fn main() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    logfile::write(&format!("Gyorsbillentyű lenyomva: {}", pretty_hotkey(&shortcut.into_string())));
+                    logfile::write(&format!("Hotkey pressed: {}", pretty_hotkey(&shortcut.into_string())));
                     let action = state(app)
                         .shortcuts
                         .lock()
@@ -1233,7 +1233,7 @@ fn main() {
                 .build(),
         )
         .setup(move |app| {
-            // Csak az első példányban fut le; egy második indítás nem nullázza a naplót
+            // Runs only in the first instance; launching a second instance does not clear the log
             logfile::init("clipcat.log");
             let handle = app.handle().clone();
             let _ = platform::set_autostart(settings.autostart);
@@ -1254,8 +1254,8 @@ fn main() {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = main_handle.hide();
-                        // A rejtett ablakban ne szóljon tovább a lejátszó: a felület a
-                        // "main-hidden" eseményre bezárja; a szüneteltetés csak védőháló
+                        // Stop playback in the hidden window: the UI closes the player on the
+                        // "main-hidden" event; pausing here is only a fallback
                         let _ = main_handle.eval("document.querySelectorAll('video').forEach(v => v.pause());");
                         let _ = main_handle.emit("main-hidden", ());
                     }
@@ -1263,11 +1263,11 @@ fn main() {
             }
 
             logfile::write(&format!(
-                "Visszajátszás induláskor: {}",
+                "Replay on startup: {}",
                 if settings.replay_enabled {
-                    "bekapcsolva"
+                    "enabled"
                 } else {
-                    "szünetel (legutóbb leállítva)"
+                    "paused (stopped last time)"
                 }
             ));
             let hotkey_error = register_hotkeys(&handle, &settings).err();
@@ -1315,5 +1315,5 @@ fn main() {
             install_update,
         ])
         .run(tauri::generate_context!())
-        .expect("a ClipCat nem indítható");
+        .expect("failed to start ClipCat");
 }

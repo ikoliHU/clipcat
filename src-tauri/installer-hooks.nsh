@@ -1,12 +1,12 @@
-; A ClipCat futas kozben maga irja ezeket; az eltavolitas ne hagyja ott oket.
+; ClipCat writes these files at runtime; remove them during uninstallation.
 !macro NSIS_HOOK_POSTUNINSTALL
-  ; Frissiteskor a regi eltavolito is lefut: az automatikus inditas maradjon
+  ; Updates also run the old uninstaller: preserve the autostart entry.
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "ClipCat"
   ${EndIf}
   Delete "$INSTDIR\obs-ffmpeg-mux.exe"
   Delete "$INSTDIR\obs-nvenc-test.exe"
-  ; A beallitasok es a naplo csak akkor torlodik, ha az "alkalmazasadatok torlese" be van jelolve
+  ; Delete settings and logs only when "Delete application data" is checked.
   ${If} $DeleteAppDataCheckboxState = 1
     Delete "$INSTDIR\settings.json"
     RMDir /r "$LOCALAPPDATA\ClipCat"

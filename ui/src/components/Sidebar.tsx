@@ -34,7 +34,7 @@ const NAV_ITEMS: { view: View; Icon: typeof GridIcon; label: string }[] = [
   { view: "settings", Icon: GearIcon, label: "nav.settings" },
 ];
 
-// Egyetlen közös kijelölő csúszik a gombok között, így nincs gombonkénti árnyék-maradvány
+// One shared selection indicator slides between buttons, avoiding leftover shadows on each button
 function Nav({ view, onView }: { view: View; onView: (view: View) => void }) {
   const buttons = useRef(new Map<View, HTMLButtonElement>());
   const [indicator, setIndicator] = useState<{ top: number; height: number } | null>(null);
@@ -45,7 +45,7 @@ function Nav({ view, onView }: { view: View; onView: (view: View) => void }) {
     if (active) setIndicator({ top: active.offsetTop, height: active.offsetHeight });
   }, [view]);
 
-  // Az első elhelyezés után kapcsol be az átmenet, különben a kijelölő a tetejéről csúszna be
+  // Enable transitions after initial placement so the indicator does not slide in from the top
   useEffect(() => {
     if (!indicator || ready) return;
     const frame = requestAnimationFrame(() => setReady(true));
@@ -84,7 +84,7 @@ function Nav({ view, onView }: { view: View; onView: (view: View) => void }) {
   );
 }
 
-// Másodpercenként újrarajzol: a puffer telítettsége és a felvétel ideje innen számolódik
+// Redraw once per second to calculate buffer fullness and recording duration
 function useNow() {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -105,7 +105,7 @@ function statusText(status: Status | null): [string, string] {
 
 function StatusCard({ settings, status, onStatus, update }: Omit<Props, "view" | "onView">) {
   const now = useNow();
-  // A folyamatban lévő művelet vezérlője addig tiltva marad, amíg a művelet be nem fejeződik
+  // Keep the control disabled until its operation completes
   const [pending, setPending] = useState<{ record?: boolean; replay?: boolean }>({});
 
   async function busy(key: "record" | "replay", value: boolean, action: () => Promise<unknown>) {

@@ -1,7 +1,7 @@
 [package]
 name = "clipcat"
 version = "0.6.0"
-description = "ShadowPlay-szerű visszajátszás-rögzítő beágyazott libobs-szal"
+description = "ShadowPlay-style replay recorder with embedded libobs"
 edition = "2021"
 
 [build-dependencies]
@@ -45,7 +45,7 @@ glib = "0.18"
 glib = { path = "vendor/glib" }
 
 [features]
-# `cargo build` önmagában is éles (beágyazott felületű) exe-t készít, tauri-cli nélkül
+# `cargo build` alone produces a production exe with an embedded UI, without tauri-cli
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 

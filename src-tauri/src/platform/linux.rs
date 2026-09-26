@@ -1,6 +1,6 @@
-//! Linux: XDG-mappák, xdg-open/gio, .desktop autostart. A kijelző, az előtérben lévő ablak és a
-//! billentyűállapot X11-en (XWaylanddel részben Waylandon is) xcb-n keresztül érhető el; az xcb-t
-//! futásidőben töltjük be, így X nélkül is elindul a program, csak ezek a funkciók hiányoznak.
+//! Linux: XDG directories, xdg-open/gio, .desktop autostart. Display, foreground window, and
+//! key state are available through xcb on X11 (partially on Wayland through XWayland). Load xcb
+//! at runtime so the app can start without X, with only these features unavailable.
 
 use super::{Monitor, WindowInfo};
 use libloading::Library;
@@ -17,7 +17,7 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// $XDG_<név>, ha abszolút útvonal, különben a HOME-hoz képesti alapértelmezés
+/// $XDG_<name> if it is an absolute path; otherwise the default relative to HOME
 fn xdg_dir(var: &str, default: &str) -> PathBuf {
     std::env::var_os(var)
         .map(PathBuf::from)
@@ -33,7 +33,7 @@ pub fn state_dir() -> PathBuf {
     xdg_dir("XDG_STATE_HOME", ".local/state").join("clipcat")
 }
 
-/// A felhasználó Videók mappája (xdg-user-dir), ennek hiányában ~/Videos
+/// The user's Videos directory (xdg-user-dir), falling back to ~/Videos
 pub fn videos_dir() -> PathBuf {
     Command::new("xdg-user-dir")
         .arg("VIDEOS")
@@ -41,7 +41,7 @@ pub fn videos_dir() -> PathBuf {
         .output()
         .ok()
         .map(|out| PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
-        // Beállítatlan mappánál az xdg-user-dir a HOME-ot adja
+        // xdg-user-dir returns HOME for an unconfigured directory
         .filter(|dir| dir.is_absolute() && *dir != home())
         .unwrap_or_else(|| home().join("Videos"))
 }
@@ -62,7 +62,7 @@ pub fn local_time(pattern: &str) -> String {
         .replace("%S", &format!("{:02}", t.tm_sec))
 }
 
-// ---------- Fájlkezelő, lomtár ----------
+// ---------- File manager, trash ----------
 
 fn file_uri(path: &str) -> String {
     let mut uri = String::from("file://");
@@ -76,7 +76,7 @@ fn file_uri(path: &str) -> String {
     uri
 }
 
-/// A fájlkezelőben kijelöli a fájlt (FileManager1 D-Bus felület), ha az nem elérhető, a mappáját nyitja meg.
+/// Select the file in the file manager (FileManager1 D-Bus interface), or open its folder if unavailable.
 pub fn reveal(path: &str) {
     let shown = Command::new("dbus-send")
         .args([
@@ -104,7 +104,7 @@ pub fn open_path(path: &str) {
     let _ = Command::new("xdg-open").arg(path).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
-/// Lomtárba helyezés (visszaállítható törlés) a GLib-bel
+/// Move to trash (recoverable deletion) through GLib
 pub fn recycle(path: &str) -> bool {
     Command::new("gio")
         .args(["trash", "--"])
@@ -114,10 +114,10 @@ pub fn recycle(path: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Linuxon nincs egységes rendszerhang; az értesítés hangtalan.
+/// Linux has no universal system sound; notifications are silent.
 pub fn beep(_error: bool) {}
 
-// ---------- Automatikus indítás ----------
+// ---------- Autostart ----------
 
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
     let path = xdg_dir("XDG_CONFIG_HOME", ".config").join("autostart").join(AUTOSTART_FILE);
@@ -127,7 +127,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             _ => Ok(()),
         };
     }
-    // AppImage-ből futva a current_exe az ideiglenes csatolási pontban van; maga a fájl az APPIMAGE
+    // In an AppImage, current_exe is in the temporary mount point; the actual file is identified by APPIMAGE
     let exe = match std::env::var_os("APPIMAGE") {
         Some(appimage) => PathBuf::from(appimage),
         None => std::env::current_exe().map_err(|e| e.to_string())?,
@@ -140,12 +140,12 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     std::fs::write(&path, entry).map_err(|e| e.to_string())
 }
 
-/// Linuxon nincs korábbi, külön OBS-folyamatos verzió.
+/// Linux has no legacy version that ran OBS as a separate process.
 pub fn migrate_legacy() {}
 
-// ---------- Értesítés-ablak ----------
+// ---------- Notification window ----------
 
-/// Az ablak beállításai (fókusz nélküli, tálcán nem látszó, mindig felül) a konfigurációból jönnek.
+/// Window settings (unfocused, hidden from the taskbar, always on top) come from the configuration.
 pub fn prepare_overlay(_window: &WebviewWindow) {}
 
 pub fn show_overlay(window: &WebviewWindow, margin: i32) {
@@ -289,7 +289,7 @@ struct Xcb {
     root: u32,
     min_keycode: u8,
     max_keycode: u8,
-    /// Az első keysym billentyűkódonként (min_keycode-tól), a PTT-gomb felismeréséhez
+    /// The first keysym for each keycode (starting at min_keycode), used to detect the PTT key
     keysyms: Vec<u32>,
     intern_atom: unsafe extern "C" fn(Conn, u8, u16, *const c_char) -> Cookie,
     intern_atom_reply: ReplyFn<InternAtomReply>,
@@ -312,10 +312,10 @@ struct Randr {
     monitor_info_next: unsafe extern "C" fn(*mut GenericIterator),
 }
 
-// A kapcsolatot csak a XCB mutex alatt használjuk
+// Access the connection only while holding the XCB mutex
 unsafe impl Send for Xcb {}
 
-/// Egy xcb-válasz, amelyet a libc free-je szabadít fel
+/// An xcb response freed by libc's free
 struct Reply<R>(*mut R);
 
 impl<R> Reply<R> {
@@ -423,7 +423,7 @@ impl Xcb {
         }
     }
 
-    /// Egy ablaktulajdonság nyers bájtjai (legfeljebb 64 KB)
+    /// Raw bytes of a window property (up to 64 KB)
     fn property(&self, window: u32, name: &str) -> Option<(u8, Vec<u8>)> {
         const ANY_PROPERTY_TYPE: u32 = 0;
         let atom = self.atom(name);
@@ -467,7 +467,7 @@ impl Xcb {
     }
 }
 
-/// Egy kapcsolat az X szerverhez az egész folyamatnak; None, ha nincs X (tiszta Wayland, konzol).
+/// One X server connection for the entire process; None without X (pure Wayland, console).
 fn with_xcb<T>(f: impl FnOnce(&Xcb) -> T) -> Option<T> {
     static XCB: OnceLock<Option<Mutex<Xcb>>> = OnceLock::new();
     let xcb = XCB.get_or_init(|| unsafe { Xcb::connect() }.map(Mutex::new)).as_ref()?;
@@ -475,7 +475,7 @@ fn with_xcb<T>(f: impl FnOnce(&Xcb) -> T) -> Option<T> {
     Some(f(&guard))
 }
 
-/// A fő monitor; a device_id a RandR-monitor sorszáma, ahogy az OBS xshm_input_v2 forrása számozza.
+/// The primary monitor; device_id is the RandR monitor index used by OBS's xshm_input_v2 source.
 pub fn primary_monitor() -> Option<Monitor> {
     with_xcb(|x| {
         let monitors = x.monitors();
@@ -507,7 +507,7 @@ pub fn foreground_window() -> Option<WindowInfo> {
     .flatten()
 }
 
-/// X keysym -> Windows virtuális billentyűkód (amit a felület KeyboardEvent.keyCode-ként rögzít)
+/// X keysym -> Windows virtual-key code (recorded as KeyboardEvent.keyCode by the UI)
 fn keysym_to_vk(sym: u32) -> Option<u32> {
     Some(match sym {
         0x61..=0x7a => sym - 0x20,             // a-z
@@ -530,7 +530,7 @@ fn keysym_to_vk(sym: u32) -> Option<u32> {
         0xff57 => 0x23,
         0xff63 => 0x2d,
         0xffff => 0x2e,
-        0x60 | 0xf6 => 0xc0, // ` és a magyar ö (a Windows VK_OEM_3)
+        0x60 | 0xf6 => 0xc0, // ` and the Hungarian layout's ö key (Windows VK_OEM_3)
         0x2d => 0xbd,
         0x3d => 0xbb,
         0x5b => 0xdb,
@@ -545,8 +545,8 @@ fn keysym_to_vk(sym: u32) -> Option<u32> {
     })
 }
 
-/// Le van-e nyomva a billentyű vagy a középső egérgomb (Windows virtuális kód).
-/// Csak X11-en (és XWayland-ablakok fókuszában) működik; Waylandon nincs globális billentyűállapot.
+/// Whether a key or middle mouse button is pressed (Windows virtual-key code).
+/// Works only on X11 (and with focused XWayland windows); Wayland has no global key state.
 pub fn key_down(vk: u32) -> bool {
     const VK_MBUTTON: u32 = 0x04;
     const BUTTON2_MASK: u16 = 1 << 9;

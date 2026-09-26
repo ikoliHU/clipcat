@@ -40,7 +40,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      # A rögzítőmotor (OBS portable zip kivonata) verziója a bundle-obs.ps1-ben van
+      # The recording engine version (extracted from the OBS portable zip) is set in bundle-obs.ps1
       - name: Cache capture engine
         if: runner.os == 'Windows'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -71,7 +71,7 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test --locked --release --manifest-path src-tauri/Cargo.toml --test glib_backport
 
-      # A CI-build aláíratlan (PR-en nincs secret); a frissítőcsomagokat a release.yml készíti
+      # CI builds are unsigned (PRs have no secrets); release.yml creates updater packages
       - name: Build
         shell: bash
         run: npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'

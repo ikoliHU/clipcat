@@ -8,7 +8,7 @@ export function updateProgressText(update: UpdateState): string | null {
   return update.progress == null ? t("update.downloading") : t("update.downloadingProgress", { progress: update.progress });
 }
 
-// A talált verzió hiba után is telepíthető marad (újrapróbálás)
+// Keep the discovered version installable after an error (retry)
 export const isInstallable = (update: UpdateState) =>
   !!update.version && (update.phase === "available" || update.phase === "error");
 

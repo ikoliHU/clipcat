@@ -20,7 +20,7 @@ export function formatSize(bytes: number): string {
   return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
-// A játék nélküli klipek az "Egyéb" csoportba kerülnek
+// Clips without a game belong to the "Other" group
 export const gameOf = (clip: Clip) => clip.game || t("gallery.otherGame");
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(" ");

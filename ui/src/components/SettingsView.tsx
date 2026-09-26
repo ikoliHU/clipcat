@@ -10,8 +10,8 @@ import { Button, Card, Keycap, Range, Row, Select, Switch, TextInput, Value } fr
 import { installUpdate, isInstallable, updateProgressText } from "./updates";
 import { GithubIcon } from "./icons";
 
-// Ajánlott bitráta 1080p H.264-hez; a gyors NVENC preset és a kikapcsolt B-képkockák miatt
-// magasabb a ShadowPlay értékeinél. A felső határ a settings.rs max_bitrate_mbps táblája.
+// Recommended bitrate for 1080p H.264; higher than ShadowPlay's values because of the fast NVENC
+// preset and disabled B-frames. The upper bound comes from the max_bitrate_mbps table in settings.rs.
 const BITRATE_1080P: Record<number, number> = { 30: 20, 60: 30, 120: 45, 144: 50 };
 const MAX_BITRATE: Record<number, number> = { 30: 80, 60: 100, 120: 130, 144: 150 };
 const MIN_BITRATE = 5;
@@ -32,7 +32,7 @@ function recommendedBitrate({ fps, resolution, codec }: Pick<Settings, "fps" | "
   return Math.min(MAX_BITRATE[fps], Math.max(MIN_BITRATE, Math.round(value / 5) * 5));
 }
 
-// A mentett alak: a szövegmezők körüli szóköz nem számít változásnak
+// Saved representation: surrounding whitespace in text fields does not count as a change
 const normalize = (s: Settings): Settings => ({ ...s, outputDir: s.outputDir.trim(), bufferDir: s.bufferDir.trim() });
 
 type Message = { text: string; tone?: "ok" | "error" };
@@ -60,7 +60,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
     return () => { alive = false; };
   }, [draft?.bufferStorage, draft?.bufferSeconds, draft?.bitrateMbps]);
 
-  // A mikrofonlista a futó motortól jön; ffmpeg nélkül a lemezes puffer nem választható
+  // The running engine provides the microphone list; the disk buffer requires ffmpeg
   useEffect(() => {
     let alive = true;
     Promise.all([
@@ -70,19 +70,19 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
       if (!alive) return;
       setMics(mics);
       setDiskAvailable(disk);
-      // A csúszka a mentett értéket az FPS-hez tartozó tartományba szorítja
+      // The slider clamps the saved value to the range for the current FPS
       const max = MAX_BITRATE[settings.fps] ?? MAX_BITRATE[60];
       setDraft({ ...settings, bitrateMbps: Math.min(max, Math.max(MIN_BITRATE, settings.bitrateMbps)) });
     });
     return () => { alive = false; };
-    // Csak megnyitáskor tölt; mentés után a draft már a friss beállításokból épül
+    // Load only on open; after saving, the draft is rebuilt from the updated settings
   }, []);
 
   useEffect(() => () => clearTimeout(messageTimer.current), []);
 
   const dirty = !!draft && JSON.stringify(normalize(draft)) !== JSON.stringify(settings);
 
-  // Újabb módosításnál a "Mentve" visszajelzés eltűnik
+  // Clear the "Saved" confirmation when another change is made
   useEffect(() => {
     if (dirty && message?.tone === "ok") setMessage(null);
   }, [dirty, message]);
@@ -91,7 +91,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft((d) => ({ ...d!, [key]: value }));
 
-  // FPS-, felbontás- vagy kodekváltáskor az ajánlott bitrátára ugrik, amit utána szabadon át lehet írni
+  // Changing FPS, resolution, or codec selects the recommended bitrate, which remains freely editable
   const setQuality = (patch: Partial<Pick<Settings, "fps" | "resolution" | "codec">>) =>
     setDraft((d) => {
       const next = { ...d!, ...patch };
@@ -127,13 +127,13 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
 
   const { bufferSeconds: buffer, bitrateMbps: bitrate, fps } = draft;
   const clipSize = Math.round((buffer * bitrate) / 8);
-  // Lemezes puffernél a teljes videó- és hangfolyam az SSD-re kerül; becslés napi DISK_DAILY_HOURS óra
-  // játékra, egy átlagos 1 TB-os SSD 600 TBW-os tanúsított írási keretéhez viszonyítva
+  // The disk buffer writes the entire video and audio stream to the SSD; estimate DISK_DAILY_HOURS hours
+  // of daily gameplay against a typical 1 TB SSD's rated endurance of 600 TBW
   const gbPerHour = ((bitrate + AUDIO_MBPS) * 3600) / 8 / 1000;
   const tbPerYear = (gbPerHour * DISK_DAILY_HOURS * 365) / 1000;
 
   const micOptions: [string, string][] = [["default", t("settings.micDevice.default")], ...mics.map((m): [string, string] => [m.id, m.name])];
-  // A mentett, de most nem csatlakoztatott eszköz is választható marad
+  // Keep the saved device selectable even if it is currently disconnected
   if (!micOptions.some(([id]) => id === draft.micDevice)) micOptions.push([draft.micDevice, t("settings.micDevice.unavailable")]);
 
   const hotkeyCapture = (field: HotkeyField) => (captured: Captured) => {
@@ -145,7 +145,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
     if (keyboard.altKey) mods.push("Alt");
     if (keyboard.shiftKey) mods.push("Shift");
     if (keyboard.metaKey) mods.push("Super");
-    // Módosító + billentyű, vagy önálló F-billentyű
+    // Modifier + key, or a standalone function key
     if (!mods.length && !/^F\d+$/.test(keyboard.code)) return { text: t("hotkey.needModifier"), ms: 1500 };
     set(field, [...mods, keyboard.code].join("+"));
   };
@@ -240,7 +240,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
               t("settings.bitrate.recommended", { value: recommendedBitrate(draft), max: MAX_BITRATE[fps] }),
             ]}
           >
-            {/* A felső határ az FPS-től függ */}
+            {/* The upper bound depends on FPS */}
             <Range min={MIN_BITRATE} max={MAX_BITRATE[fps]} step={5} value={bitrate} onChange={(e) => set("bitrateMbps", Number(e.target.value))} />
             <Value>{bitrate} Mbps</Value>
           </Row>
@@ -313,7 +313,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
           </Row>
         </Card>
 
-        {/* Lebegő, áttetsző mentés sáv: csak akkor látszik, ha változott valami (vagy épp üzenetet mutat) */}
+        {/* Floating translucent save bar: visible only when something changed (or while showing a message) */}
         {(dirty || saving || message) && (
           <div
             className={cx(
@@ -342,7 +342,7 @@ export function SettingsView({ settings, onSaved, onStatus, update }: Props) {
   );
 }
 
-// Olvasható szélességű, középre igazított oszlop; a cím ugyanahhoz az élhez igazodik
+// Centered column with a readable width; align the heading to the same edge
 function SettingsFrame({ children }: { children?: ReactNode }) {
   return (
     <section className="flex h-full animate-view-in flex-col overflow-hidden">
@@ -374,7 +374,7 @@ function UpdateRow({ update }: { update: UpdateState }) {
         <Button
           variant={installable ? "primary" : "default"}
           disabled={working || update.phase === "checking"}
-          // A hiba az update eseménnyel érkezik
+          // Errors arrive through the update event
           onClick={() => (installable ? installUpdate() : invoke("check_update").catch(() => {}))}
         >
           {t(installable ? "update.install" : "update.check")}
@@ -385,7 +385,7 @@ function UpdateRow({ update }: { update: UpdateState }) {
 
 type Flash = { text: string; ms: number };
 
-// Rögzítés alatt felszólítást mutat; a feldolgozó rövid üzenetet adhat vissza (pl. hiányzó módosító)
+// Show a prompt while capturing; the handler may return a short message (e.g. missing modifier)
 function CaptureButton({ label, modifiersOnly, onCapture }: {
   label: string;
   modifiersOnly?: boolean;

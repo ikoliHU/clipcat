@@ -1,12 +1,12 @@
-//! Beágyazott libobs: az OBS rögzítőmotorját tölti be, felület nélkül.
+//! Embedded libobs: load the OBS recording engine without its UI.
 //!
-//! Csak a szükséges modulok töltődnek be (képernyő-/játékrögzítés, hang, hardveres kódoló, replay
-//! buffer), a böngésző, websocket és egyéb pluginok nem. A replay buffer a memóriában tartja a kódolt
-//! képkockákat; mentéskor az `obs-ffmpeg-mux` segédprogram írja ki őket fájlba. Lemezes módban a
-//! puffer darabokban a lemezre íródik (lásd `disk`).
+//! Load only the required modules (screen/game capture, audio, hardware encoder, replay
+//! buffer), excluding browser, websocket, and other plugins. The replay buffer stores encoded
+//! frames in memory; when saving, the `obs-ffmpeg-mux` helper writes them to a file. In disk mode,
+//! the buffer is written to disk in segments (see `disk`).
 //!
-//! A platformfüggő rész (a libobs helye és betöltése, a források és kódolók azonosítói) a `sys`
-//! modulban van: Windowson a ClipCat saját motormappája, Linuxon a rendszerre telepített OBS.
+//! Platform-specific details (libobs location and loading, source and encoder IDs) live in `sys`:
+//! ClipCat's own engine folder on Windows, and the system OBS installation on Linux.
 
 #[cfg_attr(windows, path = "windows.rs")]
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
@@ -60,7 +60,7 @@ struct AudioInfo {
     speakers: c_int,
 }
 
-/// A libobs `struct vec2` egy __m128 unióval 16 bájtos és 16-ra igazított.
+/// libobs `struct vec2` contains an __m128 union: 16 bytes in size with 16-byte alignment.
 #[repr(C, align(16))]
 struct Vec2 {
     x: f32,
@@ -180,51 +180,51 @@ obs_api! {
 }
 
 pub enum Event {
-    /// Kész a mentés; az OBS által írt fájl útvonala (None, ha nem kérdezhető le)
+    /// Save complete; path to the file written by OBS (None if it cannot be queried)
     Saved(Option<String>),
-    /// A rögzítés leállt; nem nulla hibakód esetén hiba miatt
+    /// Capture stopped; a nonzero error code indicates failure
     Stopped(i64),
-    /// Lezárult a kézi felvétel; a fájl útvonala
+    /// Manual recording finalized; the file path
     Recorded(String),
-    /// A kézi felvétel hiba miatt leállt (hibakód)
+    /// Manual recording stopped due to an error (error code)
     RecordingFailed(i64),
-    /// A lemezes puffer mentése nem sikerült
+    /// Saving the disk buffer failed
     SaveFailed(String),
 }
 
 static API: OnceLock<Api> = OnceLock::new();
 static EVENTS: OnceLock<Box<dyn Fn(Event) + Send + Sync>> = OnceLock::new();
-/// A jelzés-visszahívásokból is el kell érni az aktuális kimenetet és a mikrofont.
+/// Signal callbacks also need access to the current output and microphone.
 static CURRENT_OUTPUT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static MIC_SOURCE: Mutex<usize> = Mutex::new(0);
 static MIC_MUTED: AtomicBool = AtomicBool::new(true);
 static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 static RECORD_STOP_CODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-// A rejtett forrás nem dolgozik (a monitorrögzítés elengedi a duplikációt, a játékrögzítés
-// lecsatlakozik), ezért csak akkor látható, ha a képére szükség van. A jelzések más szálról
-// is módosítják, ezért az állapot statikus.
+// Hidden sources do no work (monitor capture releases duplication, game capture
+// unhooks), so show them only when their image is needed. Signals from other threads
+// also update this state, so it is static.
 static DISPLAY_ITEM: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static GAME_ITEM: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static DESKTOP_WANTED: AtomicBool = AtomicBool::new(false);
 static REPLAY_WANTED: AtomicBool = AtomicBool::new(false);
 static RECORDING_WANTED: AtomicBool = AtomicBool::new(false);
-/// A játékrögzítés épp egy (teljes képernyős) játékot rögzít, ami eltakarja az asztalt
+/// Game capture is currently recording a fullscreen game that covers the desktop
 static GAME_HOOKED: AtomicBool = AtomicBool::new(false);
 static VISIBILITY_LOCK: Mutex<()> = Mutex::new(());
 
-/// A jelenetelemek láthatóságát az állapothoz igazítja.
+/// Update scene item visibility to match the current state.
 fn refresh_visibility() {
     let Some(api) = API.get() else { return };
     let _guard = VISIBILITY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (display, game) = (DISPLAY_ITEM.load(Ordering::SeqCst), GAME_ITEM.load(Ordering::SeqCst));
-    // Játékrögzítés nem minden platformon van
+    // Game capture is not available on every platform
     if display.is_null() {
         return;
     }
     let capturing = REPLAY_WANTED.load(Ordering::SeqCst) || RECORDING_WANTED.load(Ordering::SeqCst);
     if !capturing {
-        // A rejtett játékrögzítés lecsatlakozik; újra megjelenítéskor a hooked jelzés jön újra
+        // Hidden game capture unhooks; showing it again emits another hooked signal
         GAME_HOOKED.store(false, Ordering::SeqCst);
     }
     let desktop = capturing && DESKTOP_WANTED.load(Ordering::SeqCst) && !GAME_HOOKED.load(Ordering::SeqCst);
@@ -236,7 +236,7 @@ fn refresh_visibility() {
     }
 }
 
-/// A jelzések a libobs saját szálain érkeznek; a jelenetet onnan nem módosítjuk.
+/// Signals arrive on libobs threads; do not modify the scene from those threads.
 fn set_game_hooked(hooked: bool) {
     GAME_HOOKED.store(hooked, Ordering::SeqCst);
     std::thread::spawn(refresh_visibility);
@@ -260,15 +260,15 @@ fn emit(event: Event) {
     }
 }
 
-/// A libobs és a modulok helye a lemezen (a platform `sys::locate` adja).
+/// Locations of libobs and its modules on disk (provided by the platform's `sys::locate`).
 pub(crate) struct Layout {
-    /// A motor gyökere (a naplóhoz)
+    /// Engine root (for logging)
     root: PathBuf,
     /// Maga a libobs (obs.dll / libobs.so.0)
     lib: PathBuf,
-    /// A libobs adatfájljai (shaderek)
+    /// libobs data files (shaders)
     data: PathBuf,
-    /// A modulok binárisai és adatmappái
+    /// Module binaries and data directories
     plugins: PathBuf,
     plugin_data: PathBuf,
 }
@@ -286,7 +286,7 @@ pub fn engine_available() -> bool {
     sys::locate().is_some()
 }
 
-/// A lemezes pufferhez kell az ffmpeg (Windowson a motor mellé csomagolva, Linuxon a rendszeré).
+/// The disk buffer requires ffmpeg (bundled with the engine on Windows, installed by the system on Linux).
 pub fn disk_buffer_available() -> bool {
     disk::ffmpeg_available()
 }
@@ -299,7 +299,7 @@ fn forward(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-/// A libobs printf-stílusú naplóüzeneteit a saját naplófájlunkba írja.
+/// Write libobs printf-style log messages to our own log file.
 unsafe extern "C" fn log_handler(level: c_int, format: *const c_char, args: Ptr, _param: Ptr) {
     if level > LOG_INFO {
         return;
@@ -316,7 +316,7 @@ unsafe extern "C" fn on_saved(_data: Ptr, _cd: *mut Calldata) {
     emit(Event::Saved(path));
 }
 
-/// Lemezes puffer: a muxer új darabba kezdett.
+/// Disk buffer: the muxer started a new segment.
 unsafe extern "C" fn on_segment(_data: Ptr, cd: *mut Calldata) {
     let Some(api) = API.get() else { return };
     let mut path: *const c_char = std::ptr::null();
@@ -336,7 +336,7 @@ unsafe extern "C" fn on_stop(_data: Ptr, cd: *mut Calldata) {
     emit(Event::Stopped(stop_code(api, cd)));
 }
 
-/// A kézi felvétel szabályos leállítását a stop_recording jelzi; itt csak a hiba számít.
+/// stop_recording reports normal manual-recording stops; only errors matter here.
 unsafe extern "C" fn on_record_stop(_data: Ptr, cd: *mut Calldata) {
     let Some(api) = API.get() else { return };
     let code = stop_code(api, cd);
@@ -357,7 +357,7 @@ unsafe fn last_error(api: &Api, output: Ptr) -> String {
     }
 }
 
-/// Leállítja a kimenetet, és megvárja, amíg a libobs lezárja (legfeljebb `timeout` ideig).
+/// Stop the output and wait for libobs to finalize it (up to `timeout`).
 unsafe fn stop_output(api: &Api, output: Ptr, timeout: Duration) -> bool {
     (api.obs_output_stop)(output);
     let deadline = Instant::now() + timeout;
@@ -392,7 +392,7 @@ unsafe fn last_replay(api: &Api, output: Ptr) -> Option<String> {
     result
 }
 
-/// Mikrofon némítása (push-to-talk); hamis, ha a motor még nem fut.
+/// Mute the microphone (push-to-talk); false if the engine is not running yet.
 pub fn set_mic_muted(muted: bool) -> bool {
     MIC_MUTED.store(muted, Ordering::SeqCst);
     // Keep this lock through the FFI call; shutdown takes it before releasing the source.
@@ -406,24 +406,24 @@ pub fn set_mic_muted(muted: bool) -> bool {
     }
 }
 
-/// A libobs betöltése; a platform előkészíti a keresési útvonalakat.
+/// Load libobs; the platform prepares the search paths.
 fn load_api() -> Result<(&'static Api, Layout), String> {
     let layout = sys::locate().ok_or_else(|| t(sys::NOT_INSTALLED))?;
     if let Some(api) = API.get() {
         return Ok((api, layout));
     }
-    logfile::write(&format!("Rögzítőmotor: {}", layout.root.display()));
+    logfile::write(&format!("Recording engine: {}", layout.root.display()));
     let lib = sys::open(&layout)?;
     let api = unsafe { Api::load(&lib)? };
     sys::before_startup(&lib)?;
-    // A könyvtár a folyamat végéig betöltve marad
+    // Keep the library loaded for the lifetime of the process
     std::mem::forget(lib);
     let api = API.get_or_init(|| api);
     unsafe { (api.base_set_log_handler)(log_handler, null_mut()) };
     Ok((api, layout))
 }
 
-/// obs_data_t építő; a libobs lemásolja az értékeket, a Drop felszabadítja.
+/// obs_data_t builder; libobs copies the values, and Drop frees the object.
 struct Data<'a> {
     api: &'a Api,
     ptr: Ptr,
@@ -460,7 +460,7 @@ impl Drop for Data<'_> {
 pub struct Config {
     pub output_dir: String,
     pub buffer_seconds: u32,
-    /// Lemezes puffer mappája; None: memóriás replay buffer
+    /// Disk buffer folder; None means an in-memory replay buffer
     pub buffer_dir: Option<String>,
     pub base: (u32, u32),
     pub output: (u32, u32),
@@ -485,11 +485,11 @@ pub struct Engine {
     video_encoder: Ptr,
     audio_encoder: Ptr,
     output: Ptr,
-    /// Hamis, ha a felhasználó leállította a visszajátszást
+    /// False if the user stopped replay
     replay_enabled: bool,
-    /// A puffer utolsó (újra)indítása, Unix ms
+    /// Most recent buffer start/restart, in Unix milliseconds
     buffer_since: u64,
-    /// Kézi felvétel (ffmpeg_muxer), ugyanazokkal a kódolókkal
+    /// Manual recording (ffmpeg_muxer), using the same encoders
     record_output: Ptr,
     record_path: String,
     record_since: u64,
@@ -501,7 +501,7 @@ pub struct Engine {
     initialized: bool,
 }
 
-// A libobs objektumai szálbiztosak; az Engine-t Mutex védi.
+// libobs objects are thread-safe; a Mutex protects Engine.
 unsafe impl Send for Engine {}
 
 impl Drop for Engine {
@@ -648,8 +648,8 @@ impl Engine {
         }
         result
     }
-    /// Elindítja a libobs-t; folyamatonként egyszer hívható.
-    /// `replay`: induljon-e rögtön a visszajátszási puffer.
+    /// Start libobs; may be called once per process.
+    /// `replay`: whether to start the replay buffer immediately.
     pub fn start(config: &Config, replay: bool) -> Result<Engine, String> {
         let (api, layout) = load_api()?;
         unsafe {
@@ -685,7 +685,7 @@ impl Engine {
         };
         unsafe {
             let version = CStr::from_ptr((api.obs_get_version_string)()).to_string_lossy();
-            logfile::write(&format!("libobs {version} elindult"));
+            logfile::write(&format!("libobs {version} started"));
             (api.obs_add_data_path)(cs(&format!("{}/", forward(&layout.data))).as_ptr());
 
             let audio = AudioInfo {
@@ -720,22 +720,22 @@ impl Engine {
                 Ok(source)
             }
         };
-        // Az első létrehozható képernyőrögzítő (a régebbi OBS-ekben más azonosítóval)
+        // The first screen capture source that can be created (older OBS versions use a different ID)
         let display = sys::display_sources()
             .iter()
-            .map(|id| self.create_source(id, "Asztal", sys::display_settings(Data::new(api), &self.config.monitor_id)))
+            .map(|id| self.create_source(id, "Desktop", sys::display_settings(Data::new(api), &self.config.monitor_id)))
             .find(|source| !source.is_null())
             .unwrap_or(null_mut());
         self.display = required(display, sys::display_sources()[0])?;
         if let Some(id) = sys::GAME_SOURCE {
-            self.game = required(self.create_source(id, "Játék", sys::game_settings(Data::new(api))), id)?;
+            self.game = required(self.create_source(id, "Game", sys::game_settings(Data::new(api))), id)?;
         }
         unsafe {
-            self.scene = (api.obs_scene_create)(c"Felvétel".as_ptr());
+            self.scene = (api.obs_scene_create)(c"Recording".as_ptr());
             if self.scene.is_null() {
                 return Err(tf("engine.sourceCreate", &[("id", &"scene")]));
             }
-            // Hozzáadási sorrend = rétegek alulról felfelé: a játék takarja az asztalt
+            // Insertion order = layers from bottom to top: the game covers the desktop
             self.display_item = (api.obs_scene_add)(self.scene, self.display);
             let game_item = if self.game.is_null() {
                 null_mut()
@@ -772,7 +772,7 @@ impl Engine {
         Ok(())
     }
 
-    /// Az első elérhető hardveres kódoló (NVENC, Linuxon VAAPI is), ennek hiányában x264.
+    /// The first available hardware encoder (NVENC, also VAAPI on Linux), falling back to x264.
     fn create_video_encoder(&mut self) -> Ptr {
         let api = self.api;
         let c = &self.config;
@@ -788,10 +788,10 @@ impl Engine {
                     .str("rate_control", "CBR")
                     .int("bitrate", c.bitrate_kbps as i64)
                     .int("keyint_sec", 2)
-                    // A p4 a minőség és a kódolóterhelés legjobb egyensúlya; ekkora bitrátán a
-                    // pszichovizuális AQ és a B-képkockák alig javítanak a képen, a folyamatos
-                    // pufferelésnél viszont sokszorosára növelik a kódoló terhelését
-                    // Az OBS 31+ obs-nvenc kulcsai: a régi preset2/psycho_aq hatástalan
+                    // p4 provides the best balance between quality and encoder load; at this bitrate,
+                    // psychovisual AQ and B-frames barely improve image quality but multiply encoder
+                    // load during continuous buffering
+                    // OBS 31+ obs-nvenc keys: the old preset2/psycho_aq settings have no effect
                     .str("preset", "p4")
                     .str("tune", "hq")
                     .str("multipass", "disabled")
@@ -810,7 +810,7 @@ impl Engine {
             let encoder = unsafe { (api.obs_video_encoder_create)(cs(id).as_ptr(), c"clipcat_video".as_ptr(), settings.ptr, null_mut()) };
             if !encoder.is_null() {
                 self.encoder_name = id.to_string();
-                logfile::write(&format!("Videókódoló: {id}"));
+                logfile::write(&format!("Video encoder: {id}"));
                 return encoder;
             }
         }
@@ -865,13 +865,13 @@ impl Engine {
             self.start_replay()?;
         }
         logfile::write(&format!(
-            "Rögzítés: {}x{} @ {} FPS, {} kbps, {} s puffer ({})",
+            "Capture: {}x{} @ {} FPS, {} kbps, {} s buffer ({})",
             c.output.0,
             c.output.1,
             c.fps,
             c.bitrate_kbps,
             c.buffer_seconds,
-            c.buffer_dir.as_deref().map_or("memória".to_string(), |d| format!("lemez: {d}"))
+            c.buffer_dir.as_deref().map_or("memory".to_string(), |d| format!("disk: {d}"))
         ));
         Ok(())
     }
@@ -882,7 +882,7 @@ impl Engine {
             return Err(t("engine.replayNotCreated"));
         }
         if let Some(dir) = &self.config.buffer_dir {
-            // Minden indítás új, üres darabsorral kezd
+            // Start with a new, empty segment queue every time
             let first = disk::begin(Path::new(dir), self.config.buffer_seconds, self.config.bitrate_kbps)?;
             let settings = Data::new(api)
                 .str("path", &forward(&first))
@@ -890,7 +890,7 @@ impl Engine {
             unsafe { (api.obs_output_update)(self.output, settings.ptr) };
         }
         unsafe {
-            // Közvetlenül egy leállítás után a libobs még zárhatja az előző adatfolyamot
+            // Immediately after a stop, libobs may still be closing the previous stream
             loop {
                 if (api.obs_output_start)(self.output) {
                     self.buffer_since = now_ms();
@@ -919,7 +919,7 @@ impl Engine {
         self.buffer_since = 0;
     }
 
-    /// A visszajátszási puffer ki-/bekapcsolása; a kézi felvételt nem érinti.
+    /// Enable or disable the replay buffer without affecting manual recording.
     pub fn set_replay_enabled(&mut self, enabled: bool) -> Result<(), String> {
         if self.saving() {
             return Err(t("engine.saveBusy"));
@@ -945,13 +945,13 @@ impl Engine {
         }
     }
 
-    /// Mentés után üríti a puffert: a következő klip csak az innentől rögzítetteket tartalmazza.
-    /// A kódolók futva maradnak, így egy közben zajló kézi felvétel nem szakad meg.
+    /// Clear the buffer after saving: the next clip contains only footage recorded from this point onward.
+    /// Keep the encoders running so an ongoing manual recording is not interrupted.
     pub fn clear_replay(&mut self) -> Result<(), String> {
         if !self.replay_active() {
             return Ok(());
         }
-        // Lemezen elég a lezárt darabokat törölni, a kimenet futhat tovább
+        // In disk mode, deleting finalized segments is enough; the output can keep running
         if self.config.buffer_dir.is_some() {
             disk::clear();
             self.buffer_since = now_ms();
@@ -1009,16 +1009,16 @@ impl Engine {
         }
         self.record_path = path.to_string_lossy().into_owned();
         self.record_since = now_ms();
-        logfile::write(&format!("Felvétel indult: {}", self.record_path));
+        logfile::write(&format!("Recording started: {}", self.record_path));
         Ok(())
     }
 
-    /// Leállítja a kézi felvételt; a lezárt fájlról `Recorded` eseményt küld.
+    /// Stop manual recording; emit a `Recorded` event for the finalized file.
     pub fn stop_recording(&mut self) -> Result<(), String> {
         if !self.recording_active() {
             return Ok(());
         }
-        // A muxer a leállításkor írja ki a fájl végét, ez hosszú felvételnél eltarthat egy ideig
+        // The muxer writes the end of the file on stop; this may take a while for long recordings
         let finished = unsafe { stop_output(self.api, self.record_output, Duration::from_secs(30)) };
         self.release_record_output();
         set_recording_wanted(false);
@@ -1027,7 +1027,7 @@ impl Engine {
         if !finished || RECORD_STOP_CODE.load(Ordering::SeqCst) != 0 || !std::fs::metadata(&path).is_ok_and(|m| m.len() > 0) {
             return Err(tf("engine.recordingFinalize", &[("path", &path)]));
         }
-        logfile::write(&format!("Felvétel leállt: {path}"));
+        logfile::write(&format!("Recording stopped: {path}"));
         emit(Event::Recorded(path));
         Ok(())
     }
@@ -1044,7 +1044,7 @@ impl Engine {
         !self.record_output.is_null() && unsafe { (self.api.obs_output_active)(self.record_output) }
     }
 
-    /// A futó felvétel fájlja (a galéria ezt még nem mutatja)
+    /// The file for the ongoing recording (not yet shown in the gallery)
     pub fn recording_path(&self) -> Option<&str> {
         self.recording_active().then_some(self.record_path.as_str())
     }
@@ -1094,7 +1094,7 @@ impl Engine {
         }
     }
 
-    /// Új beállítások alkalmazása: a puffert újraépíti, szükség esetén a videót is újrainicializálja.
+    /// Apply new settings: rebuild the buffer and reinitialize video if needed.
     pub fn apply(&mut self, config: &Config) -> Result<(), String> {
         if self.recording_active() || self.saving() {
             return Err(t("engine.settingsBusy"));
@@ -1129,7 +1129,7 @@ impl Engine {
         self.build_pipeline()
     }
 
-    /// Mikrofonváltás; a puffert nem kell hozzá újraépíteni.
+    /// Change the microphone without rebuilding the buffer.
     pub fn set_mic_device(&mut self, device: &str) {
         if self.config.mic_device != device {
             self.config.mic_device = device.to_string();
@@ -1143,10 +1143,10 @@ impl Engine {
         }
         let settings = Data::new(self.api).str("device_id", device);
         unsafe { (self.api.obs_source_update)(self.mic, settings.ptr) };
-        logfile::write(&format!("Mikrofon: {device}"));
+        logfile::write(&format!("Microphone: {device}"));
     }
 
-    /// A választható mikrofonok (azonosító, név); az alapértelmezett eszköz nélkül.
+    /// Available microphones (ID, name), excluding the default device.
     pub fn list_mics(&self) -> Vec<(String, String)> {
         let api = self.api;
         let mut list = Vec::new();
@@ -1174,7 +1174,7 @@ impl Engine {
         list
     }
 
-    /// Újraindítja a puffert változatlan beállításokkal (pl. hiba miatti leállás után).
+    /// Restart the buffer with unchanged settings (e.g. after an error stops it).
     pub fn restart(&mut self) -> Result<(), String> {
         // Outputs share encoders: recovering replay must never stop manual recording.
         if self.saving() {
@@ -1200,7 +1200,7 @@ impl Engine {
         !self.output.is_null() && unsafe { (self.api.obs_output_active)(self.output) }
     }
 
-    /// A mentés háttérben készül el; az eredmény `Saved` (vagy `SaveFailed`) eseményként jön.
+    /// Saving finishes in the background; the result arrives as a `Saved` or `SaveFailed` event.
     pub fn save(&mut self) -> Result<(), String> {
         if !self.replay_active() {
             return Err(t("engine.replayNotRunning"));
@@ -1245,7 +1245,7 @@ impl Engine {
             SAVE_PENDING.store(false, Ordering::SeqCst);
             return Err(t("engine.saveStart"));
         }
-        // A lezárásra várás és az összefűzés másodpercekig tart: nem tartja a motor zárát
+        // Waiting for finalization and concatenating can take seconds; do not hold the engine lock
         let (seconds, output_dir) = (self.config.buffer_seconds, PathBuf::from(&self.config.output_dir));
         self.save_worker = Some(std::thread::spawn(move || {
             let result = disk::finish_save(known, seconds, &output_dir);
@@ -1295,14 +1295,14 @@ impl Engine {
             }
             (api.obs_shutdown)();
         }
-        logfile::write("libobs leállítva");
+        logfile::write("libobs shut down");
     }
 }
 
 #[cfg(test)]
 mod tests;
 
-/// Memóriás replay buffer; mentéskor a libobs írja ki a fájlt a mentési mappába.
+/// In-memory replay buffer; libobs writes the file to the output folder when saving.
 unsafe fn create_memory_output(api: &Api, c: &Config, budget: crate::resources::BufferBudget) -> Ptr {
     let settings = Data::new(api)
         .str("directory", &forward(Path::new(&c.output_dir)))
@@ -1314,7 +1314,7 @@ unsafe fn create_memory_output(api: &Api, c: &Config, budget: crate::resources::
     (api.obs_output_create)(c"replay_buffer".as_ptr(), c"clipcat_replay".as_ptr(), settings.ptr, null_mut())
 }
 
-/// Lemezes puffer: folyamatos felvétel rövid darabokra bontva; az első darab útvonalát indításkor kapja.
+/// Disk buffer: continuous recording split into short segments; the first segment path is set at startup.
 unsafe fn create_disk_output(api: &Api, dir: &Path) -> Ptr {
     let settings = Data::new(api)
         .str("directory", &forward(dir))
@@ -1370,7 +1370,7 @@ unsafe fn load_modules(api: &Api, layout: &Layout) -> Result<(), String> {
             (api.obs_open_module)(&mut module, cs(&forward(&bin)).as_ptr(), cs(&forward(&data)).as_ptr()) == MODULE_SUCCESS
                 && (api.obs_init_module)(module)
         };
-        logfile::write(&format!("Modul {name}: {}", if loaded { "betöltve" } else { "NEM töltődött be" }));
+        logfile::write(&format!("Module {name}: {}", if loaded { "loaded" } else { "NOT loaded" }));
         if !loaded && required {
             return Err(tf("engine.moduleLoad", &[("name", &name)]));
         }

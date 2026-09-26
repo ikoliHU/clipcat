@@ -20,12 +20,12 @@ interface Props {
 export function Gallery({ clips, filter, onFilter, hotkeySave, onRefresh, onOpen }: Props) {
   const [page, setPage] = useState(0);
   const pageSize = 60;
-  // Egyszerre legfeljebb egy lejátszó előnézet él, kis késleltetéssel indul
+  // Keep at most one playing preview active, starting after a short delay
   const [hovered, setHovered] = useState<string | null>(null);
   const hoverTimer = useRef(0);
 
   const games = [...new Set(clips.map(gameOf))].sort((a, b) => a.localeCompare(b, i18n.lang));
-  // Ha a szűrt játék utolsó klipje is eltűnt, visszaáll az összesre
+  // Reset to all games if the last clip for the filtered game has disappeared
   const activeFilter = games.includes(filter) ? filter : "";
   const visible = clips.filter((c) => !activeFilter || gameOf(c) === activeFilter);
   const pages = Math.max(1, Math.ceil(visible.length / pageSize));
@@ -155,7 +155,7 @@ const Tile = memo(function Tile({ tileKey: key, clip, previewing, onHover, onOpe
   );
 });
 
-// Lejátszó előnézet; eltávolításkor a dekódert is elengedi
+// Playing preview; release the decoder when removed
 function HoverPreview({ path }: { path: string }) {
   const [playing, setPlaying] = useState(false);
   const attach = useCallback((video: HTMLVideoElement | null) => {

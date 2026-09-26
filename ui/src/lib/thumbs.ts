@@ -1,6 +1,6 @@
-// Az előnézet állókép (JPEG), nem élő videó: a csempék nem tartanak nyitva dekódert.
-// A képet egy rejtett videóból rajzoljuk ki, egyszerre legfeljebb THUMB_WORKERS darabot,
-// és csak a képernyőn (vagy közelében) lévő csempékhez. Az eredmény IndexedDB-be kerül.
+// Thumbnails are still images (JPEG), not live video: tiles do not keep a decoder open.
+// Render images from hidden videos, processing at most THUMB_WORKERS at once,
+// and only for tiles on or near the screen. Store the results in IndexedDB.
 import { convertFileSrc } from "./tauri";
 import type { Clip } from "./tauri";
 
@@ -26,13 +26,13 @@ interface Job {
   el: Element;
 }
 
-const cache = new Map<string, Stored>(); // tileKey -> kép
-const urls = new Map<string, string>(); // tileKey -> object URL, klipenként egyszer létrehozva
-const failed = new Set<string>(); // ebben a munkamenetben nem sikerült; nem próbáljuk újra
+const cache = new Map<string, Stored>(); // tileKey -> image
+const urls = new Map<string, string>(); // tileKey -> object URL, created once per clip
+const failed = new Set<string>(); // Failed in this session; do not retry
 const inFlight = new Set<string>();
 const listeners = new Map<string, Set<Listener>>();
 const jobs = new Map<Element, Job>();
-const queue = new Set<Job>(); // előnézetre váró, látható csempék
+const queue = new Set<Job>(); // Visible tiles waiting for thumbnails
 let active = 0;
 let validKeys: Set<string> | null = null;
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
@@ -95,7 +95,7 @@ export function getThumb(key: string): Thumb | undefined {
   return { url, duration: stored.duration };
 }
 
-// A már nem létező klipek képét és tárolt előnézetét elengedi
+// Release images and stored thumbnails for clips that no longer exist
 export function pruneThumbs(keep: Set<string>) {
   validKeys = keep;
   for (const key of cache.keys()) if (!keep.has(key)) evict(key);
@@ -112,13 +112,13 @@ export function pruneThumbs(keep: Set<string>) {
   }).catch(() => {});
 }
 
-// Egy rejtett videóból kivesz egy képkockát; minden ágon elengedi a videót
+// Extract a frame from a hidden video; release the video on every code path
 function capture(path: string): Promise<Stored> {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");
     video.muted = true;
     video.preload = "auto";
-    video.crossOrigin = "anonymous"; // enélkül a canvas "szennyezett" lenne, és a toBlob hibát dobna
+    video.crossOrigin = "anonymous"; // Otherwise the canvas would be tainted and toBlob would throw
     let done = false;
     const finish = (err: unknown, result?: Stored) => {
       if (done) return;
@@ -190,7 +190,7 @@ function forget(el: Element) {
   observer.unobserve(el);
 }
 
-// A képernyőről elgörgetett csempe kikerül a sorból, így a gyors görgetés nem halmoz fel munkát
+// Remove offscreen tiles from the queue so fast scrolling cannot accumulate work
 const observer = new IntersectionObserver((entries) => {
   for (const { target, isIntersecting } of entries) {
     const job = jobs.get(target);
@@ -201,7 +201,7 @@ const observer = new IntersectionObserver((entries) => {
   pump();
 }, { rootMargin: "300px" });
 
-// Előnézetet kér a csempéhez, amint a képernyő közelébe kerül; a visszaadott függvény lemondja
+// Request a thumbnail when the tile approaches the screen; the returned function cancels the request
 export function requestThumb(key: string, path: string, el: Element, notify: Listener): () => void {
   if (failed.has(key)) return () => {};
   if (!listeners.has(key)) listeners.set(key, new Set());

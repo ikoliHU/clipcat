@@ -1,17 +1,17 @@
 # clipcat
 
-## Nyelv és Infó
+## Language and Info
 
-A Beállítások **Nyelv** mezője Magyar és English US között vált. Első induláskor a Windows
-megjelenítési nyelve dönt; magyar Windows esetén magyar, minden más esetben English US lesz.
-A mentett kézi választás később megmarad. Mentés után a felület, tálcamenü és értesítések
-újraindítás nélkül váltanak nyelvet.
+The **Language** field in Settings switches between Hungarian and English US. On first launch,
+the Windows display language determines the default: Hungarian for Hungarian Windows, English US otherwise.
+A saved manual selection is retained for subsequent launches. After saving, the UI, tray menu, and notifications
+switch languages without restarting.
 
-A beállítások alján az **Infó** rész tartalmazza a verziót, a frissítéskeresést, a licenchivatkozást
-és a GitHub ikont. A repository a [catninth/clipcat](https://github.com/catninth/clipcat).
-A Licenc gomb a megadott [MPL-2.0 licencfájlt](https://github.com/catninth/cutcat/blob/main/LICENSE) nyitja meg.
+The **Info** section at the bottom of Settings contains the version, update check, license link,
+and GitHub icon. The repository is [catninth/clipcat](https://github.com/catninth/clipcat).
+The License button opens the specified [MPL-2.0 license file](https://github.com/catninth/cutcat/blob/main/LICENSE).
 
-## Kiadás és frissítések
+## Releases and updates
 
 ClipCat uses the shared [`catninth-updater`](https://github.com/catninth/updater)
 Rust library. It checks stable releases from `catninth/clipcat` after 20 seconds,
@@ -21,48 +21,48 @@ NSIS on Windows, AppImage replacement or `.deb`/`.rpm` installation through `pke
 on Linux. Recording and clip-saving guards remain in ClipCat.
 See [the updater integration guide](docs/updater.md) for configuration and lifecycle details.
 
-Új verzió kiadása:
+To publish a new version:
 
-1. Emeld a verziót a `src-tauri/Cargo.toml`-ban és a `src-tauri/Cargo.lock` saját `clipcat`
-   bejegyzésében (a `tauri.conf.json` a Cargo-verziót használja), majd frissítsd a `CHANGELOG.md`-t.
-2. Commit és push után Actions → **release** → *Run workflow*, `publish` bepipálva,
-   az előző kiadások formáját követő angol release notes-szal.
-   Ez `v<verzió>` kiadást készít a telepítőkkel, az aláírásokkal és a `latest.json`-nal.
+1. Bump the version in `src-tauri/Cargo.toml` and the `clipcat` entry in `src-tauri/Cargo.lock`
+   (`tauri.conf.json` uses the Cargo version), then update `CHANGELOG.md`.
+2. After committing and pushing, open Actions → **release** → *Run workflow*, enable `publish`,
+   and provide English release notes following the format of previous releases.
+   This creates a `v<version>` release with installers, signatures, and `latest.json`.
 
-A `release` workflow minden éjjel `nightly` pre-release-t is készít; ezt a frissítő nem látja.
+The `release` workflow also creates a `nightly` prerelease every night; the updater ignores these.
 
-A csomagokat a frissítő minisign-kulccsal ellenőrzi. A publikus kulcs a `tauri.conf.json`-ban
-van, a titkos kulcs és jelszava a repó `TAURI_SIGNING_PRIVATE_KEY` és
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secretjében. Ha a titkos kulcs elveszik, a már telepített
-példányok nem tudnak többé frissíteni.
+The updater verifies packages with a minisign key. The public key is in `tauri.conf.json`;
+the private key and its password are stored in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. If the private key is lost, existing installations
+can no longer receive updates.
 
-## Fejlesztés
+## Development
 
-A felület React + Tailwind CSS (Vite), forrása a `ui/` mappában; a fordítások a
-`ui/locales/`-ban vannak, ezeket a Rust oldal is beolvassa.
+The UI uses React + Tailwind CSS (Vite), with source files in `ui/`; translations live in
+`ui/locales/` and are also loaded by Rust.
 
 ```sh
 npm install
-npx tauri dev    # Vite dev szerver + az alkalmazás
-npx tauri build  # telepítőcsomag
+npx tauri dev    # Vite dev server + application
+npx tauri build  # installer package
 ```
 
-## Ellenőrzés
+## Verification
 
 ```sh
 npm ci
 npm test
 npm run build
-# Windows: a natív tesztekhez is elő kell állítani a konfigurált erőforrásokat.
+# Windows: generate the configured resources for native tests as well.
 powershell -NoProfile -ExecutionPolicy Bypass -File bundle-obs.ps1
 cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/bundle.test.ps1
 node tests/recording-crash.mjs
 ```
 
-`npm run preview:ui` külön böngészős tesztfelületet indít a `127.0.0.1:5174` címen.
-A valódi React komponenseket használja szimulált natív válaszokkal; nem indít rögzítést,
-telepítőt, és nem írja át az alkalmazás mentett beállításait.
+`npm run preview:ui` starts a separate browser test UI at `127.0.0.1:5174`.
+It uses the real React components with simulated native responses; it does not start recording,
+run an installer, or overwrite the application's saved settings.
 
-Az eredeti audit hibáinak reprodukciója, a javítások és a tesztek korlátai:
+For reproductions of the original audit findings, fixes, and test limitations, see
 [audit-verification.md](docs/audit-verification.md).

@@ -1,108 +1,108 @@
-# ClipCat audit – javítások és bizonyítás
+# ClipCat audit – fixes and evidence
 
-Dátum: 2026-09-26. Kiindulás: `f0887bc4c0fffb19e3368c8a7a2661c8eb2f9034`, `main`.
-A munka előtt a remote lehúzása megtörtént. Az origin a felhasználó pontosítása alapján
-`https://github.com/catninth/clipcat`; új branch nem készült.
+Date: 2026-09-26. Baseline: `f0887bc4c0fffb19e3368c8a7a2661c8eb2f9034`, `main`.
+The remote was fetched before work began. As clarified by the user, origin is
+`https://github.com/catninth/clipcat`; no new branch was created.
 
-## Vizsgált anyag
+## Material reviewed
 
-A csatolt audit a `Beillesztett szöveg.txt` fájlban érkezett, Markdown-formátumú tartalommal,
-18 sorszámozott megállapítással. Külön csatolt `.md` fájl nem volt elérhető.
-Az audit állításait vizsgálati adatként kezeltük, nem végrehajtandó utasításként.
+The attached audit arrived as a pasted-text `.txt` file containing Markdown,
+with 18 numbered findings. No separate `.md` attachment was available.
+The audit's claims were treated as data to investigate, not instructions to execute.
 
-## Reprodukált hibák
+## Reproduced bugs
 
-`python tests/reproduce-baseline.py` az eredeti commit teljes `disk.rs` modulját, valamint
-a változatlan `migrate_legacy` és `parse_resolution` függvényét fordítja egy külön tesztprogramba.
-A fájlok és az `APPDATA` ideiglenes mappába kerülnek. A folyamatkeresés/leállítás tesztdupla:
-valódi OBS-folyamatot nem állít le. Az elvárt működést ellenőrző mind a hat teszt elbukott:
+`python tests/reproduce-baseline.py` compiles the original commit's entire `disk.rs` module and
+the unchanged `migrate_legacy` and `parse_resolution` functions into a separate test program.
+Files and `APPDATA` are placed in a temporary directory. Process discovery/termination uses a test double:
+no real OBS process is stopped. All six tests checking the expected behavior failed:
 
-| Eredeti hiba | Megfigyelt eredmény |
+| Original bug | Observed result |
 | --- | --- |
-| Mentés közben nincs takarítás | 13 szegmens maradt a legfeljebb 5 helyett. |
-| Leállítás törli a mentéshez tartozó fájlt | A még használt szegmens eltűnt. |
-| Sikertelen törlés nyilvántartásból kiesik | A zárolást modellező könyvtár megmaradt, de már nem szerepelt a gyűrűben. |
-| Visszafelé állított óra | `attempt to subtract with overflow` pánik a vágásnál. |
-| Idegen OBS migrációs leállítása | Egy idegen PID kapott leállítási hívást, a teszt-sentinel eltűnt. |
-| Korlátlan felbontás | `4294967294x4294967294` elfogadva. |
+| No cleanup while saving | 13 segments remained instead of at most 5. |
+| Stopping deletes a file used by a save | A segment still in use disappeared. |
+| Failed deletion drops the tracking entry | The directory simulating a locked file remained but was no longer in the ring. |
+| Clock moved backward | Trimming panicked with `attempt to subtract with overflow`. |
+| Migration stops an unrelated OBS instance | An unrelated PID received a stop call, and the test sentinel disappeared. |
+| Unbounded resolution | `4294967294x4294967294` was accepted. |
 
-A reprodukciós szkript csak akkor tér vissza sikerrel, ha mind a hat eredeti hiba előjön.
-Ezért a kimenetében a hat `FAILED` az elvárt bizonyíték, nem a javított alkalmazás teszteredménye.
+The reproduction script succeeds only if all six original bugs occur.
+Its six `FAILED` results are therefore the expected evidence, not test results for the fixed application.
 
-Az eredeti frontenddel a fókuszvesztés, a gyorsbillentyű-rögzítés határideje és az 5 Mbps érték
-megőrzése is elbukott. A javítás után ezek a regressziós tesztek sikeresek.
+With the original frontend, focus loss, the hotkey capture timeout, and preservation of the 5 Mbps value
+also failed. These regression tests pass after the fixes.
 
-Linux konténerben az eredeti `glib 0.18.5` string-iterátora optimalizált fordítással
-`SIGSEGV` hibát adott. Az upstream két soros javításával ugyanaz a teszt sikeres,
-1000 ismétléssel és mindkét irányú iterálással. Szkript: `tests/linux-glib.sh`.
+In a Linux container, the original `glib 0.18.5` string iterator caused a `SIGSEGV`
+in an optimized build. With the upstream two-line fix, the same test passes,
+with 1,000 repetitions and iteration in both directions. Script: `tests/linux-glib.sh`.
 
-A `node tests/recording-crash.mjs` szintetikus, 160×90-es videót kódol, majd csak a saját
-FFmpeg-folyamatát szakítja meg. A hagyományos MP4 nem dekódolható (`moov atom not found`);
-a tényleges Rust-kódból kiolvasott fragmentálási és flush beállításokkal a fájl dekódolható.
-Ez a konténerformátum tulajdonságát ellenőrzi; nem szimulál minden libobs-, driver- vagy áramhibát.
+`node tests/recording-crash.mjs` encodes a synthetic 160×90 video and then interrupts only its own
+FFmpeg process. The conventional MP4 cannot be decoded (`moov atom not found`);
+with fragmentation and flush settings read from the actual Rust code, the file remains decodable.
+This checks a property of the container format; it does not simulate every libobs, driver, or power failure.
 
-## Az audit 18 pontja
+## The audit's 18 findings
 
-| Pont | Módosítás | Ellenőrzés, bizonyítás határa |
+| Finding | Change | Verification and limits of the evidence |
 | --- | --- | --- |
-| 01 – lemezes mentés, kvóta | Csak az aktuális mentés szegmensei védettek; közben folytatódik a takarítás. Byte-kvóta, 1 GiB szabadhely-tartalék, a mentett adathoz további helyigény; FFmpeg 60 s határidővel és megszakítással. Sikertelen törlés újrapróbálható. | Eredeti kód reprodukciója; szegmens- és törlési tesztek; valódi elakadt gyermekfolyamat kilövése; helyhiány írás nélküli modellezése. Fizikailag nem töltöttünk be meghajtót. |
-| 02 – idegen OBS | A folyamatnév szerinti leállítás és az OBS-sentineltörlés kikerült. Csak ClipCat saját korábbi metaadatai takaríthatók. | Eredeti függvény tesztduplával bizonyított; a javítás tesztje megőrzi az idegen sentinelt és a videót. |
-| 03 – RAM | A kódolt puffer plafonja a teljes RAM 1/8-a, a pillanatnyilag elérhető RAM 1/4-e és 2 GiB közül a legkisebb. Tartalék mellett rövidülhet a tényleges pufferidő; túl kevés memória esetén nem indul. A felület jelzi a keretet/időt. | Kis és nagy RAM-készlet tesztje; mentés előtt a puffer felső mérete is beleszámít a szükséges tárhelybe. Ez nem a teljes folyamat RAM-korlátja. |
-| 04 – kódoló-fallback | Regisztrált encoder/source azonosítók ellenőrzése; sikertelen tényleges kimenetindításkor következő kódoló kipróbálása. Az aktív kódoló látható; x264 esetén CPU-terhelési jelzés. | Libobs API-tesztdupla: hiányzó azonosító, meghiúsuló NVENC-indítás, sikeres x264. Valódi GPU-kon további ellenőrzés szükséges. |
-| 05 – mentési versenyek | Saját session könyvtár/azonosító, mentési guard és szálbevárás. Régi callback nem módosít új sessiont. Átállítás aktív mentés/felvétel alatt tiltott; replay-helyreállítás megtartja a kézi felvételt. | Régi fájltörlés reprodukciója; két session, régi callback, mentési szál és aktív kézi kimenet tesztjei. |
-| 06 – mikrofonmutató | A FFI-használatot és felszabadítást ugyanaz a mutex védi. | Két szálas teszt: a felszabadítás a kölcsönzés elengedéséig vár. |
-| 07 – részleges inicializálás | `Engine::Drop` már a libobs sikeres indulásától kezeli a részlegesen felépült objektumokat. | 100 hibás pipeline-építési ciklus: minden létrejött encoder és a libobs felszabadul a tesztduplában. |
-| 08 – beállítások | Betöltési normalizálás, páros és korlátozott felbontás, hibás/NUL-os értékek javítása vagy elutasítása. Előbb motoralkalmazás, utána fájlmentés; hibánál visszaállítás. Sorosított írás és műveletek. | Extrém felbontás régi reprodukciója; hibás JSON/értékek; 16 szálon 160 fájlmentés; aktív felvétel átállításának elutasítása. A valós driver visszaállási hibája külön futtatást igényel. |
-| 09 – tétlen hangforrás | Új beállításnál a mikrofon kikapcsolt. Hangforrás csak tényleges rögzítési szándéknál él; kikapcsoláskor/tétlen állapotban felszabadul. Sikertelen indulás visszavonja a szándékot. | Tétlen/off és hibás indulási tesztek. WASAPI-eszköznyitást ezen a gépen nem mértünk. |
-| 10 – MP4, lezárás | Kézi felvétel fragmentált MP4-be, rendszeres flush mellett. Lezárási timeout/hibakód/üres fájl nem eredményez sikeres mentési eseményt; részleges fájl megmarad. | Valódi szintetikus FFmpeg-megszakítás; üres és hibás kimenet natív tesztje. Áramkimaradásnál az utolsó töredék továbbra is elveszhet. |
-| 11 – CSP, IPC, média | CSP, csak főablakhoz rendelt alkalmazásparancsok; toast csak eseményt hallgat. Videókra korlátozott, aktuális gyökérmappát minden kérésnél ellenőrző protokoll. Mappaváltás natív tallózóhoz kötött. | Konfigurációs tesztek; nem videó/idegen fájl elutasítása; korábbi gyökér hozzáférésének visszavonása; toast tiltása; korlátozott HTTP-range. Nem teljes penetrációs teszt. |
-| 12 – OBS-csomag | OBS és FFmpeg rögzített SHA256; ZIP-útvonalvalidálás; dedikált célmappa ellenőrzése; fájlonként ellenőrzött cache; saját temp mappák ellenőrzött takarítása hibaágon is. | PowerShell tesztek manipulált útvonalakkal/hash-sel/cache-sel; valódi bundle és ismételt cache-ellenőrzés. A helyi manifest nem egy helyi támadó elleni aláírás. |
-| 13 – GLib | Hitelesített `0.18.5` forráscsomag, upstream `PR #1343` két soros backportja, Cargo patch. | Linux release teszt: eredeti SIGSEGV, javított siker. A verziószám marad 0.18.5, ezért verzióalapú audit továbbra is jelezheti. |
-| 14 – frissítőverseny | Letöltés után az aktuális motorállapot ismételt ellenőrzése ugyanazon műveleti zár alatt, amely a rögzítési indításokat védi. Telepítési jelző blokkolja az új indítást. | Letöltés közben indult felvétel elutasítja a telepítést; 100 két szálas versenyben a két művelet nem sikerülhet egyszerre. Valódi telepítőt nem futtattunk. |
-| 15 – gyorsbillentyű-rögzítés | Blur, rejtett dokumentum, unmount/AbortSignal és 30 s határidő leállítja. IPC-hibánál is visszaenged; natív oldalon fókuszvesztés és 35 s őr védi. | Frontend: blur, timeout, unmount a függő IPC közben, IPC-elutasítás. |
-| 16 – galéria | Az 500-as levágás megszűnt, a fájlkeresés blokkoló munkaszálon fut. A UI 60 elemenként lapoz és összméretet mutat. | 510 fájlos natív teszt, 501. klip megnyitása a React felületen. A teljes metaadatlista még memóriába kerül; nem adatbázis alapú indexelés. |
-| 17 – óravisszaállítás | A lemezes megőrzés és vágási idő `Instant` alapú; a falióra csak fájlnév/UI célra kell. | Eredeti visszafelé álló órával overflow reprodukálva; az új megőrzési algoritmus monoton időpontokon tesztelve. |
-| 18 – egyéb erőforrások | IndexedDB-képek csak láthatóságkor töltődnek, 32 MiB inaktív RAM-cache célkeret, URL/listener/failed takarítás. 5 Mbps minimum egységes. Korlátos naplósor, 5 MiB aktív + előző log. PTT-n kívül 200 ms mikrofonfigyelés. CI-action SHA-k, rögzített Node/Rust, írásjog csak publish jobban. | Cache-láthatóság/törlés, 5 Mbps megőrzés, 1000 naplósor és nagy régi log, workflow-engedélyezés tesztjei. A látható csempék cache-e átmenetileg túllépheti a célkeretet. |
+| 01 – disk saving, quota | Only segments used by the current save are protected; cleanup continues. Byte quota, 1 GiB free-space reserve, and additional space required for saved data; FFmpeg has a 60 s timeout and cancellation. Failed deletions can be retried. | Original-code reproduction; segment and deletion tests; termination of a real stalled child process; simulated insufficient space without writing data. No physical drive was filled. |
+| 02 – unrelated OBS | Removed process-name-based termination and OBS sentinel deletion. Only ClipCat's own legacy metadata may be cleaned up. | Original function verified with a test double; the regression test preserves the unrelated sentinel and video. |
+| 03 – RAM | The encoded buffer is capped at the smallest of 1/8 of total RAM, 1/4 of currently available RAM, and 2 GiB. Reserving memory may shorten the actual buffer duration; insufficient memory prevents startup. The UI shows the budget/duration. | Tests with small and large RAM capacities; the buffer's upper size bound also counts toward the space required before saving. This is not a RAM limit for the entire process. |
+| 04 – encoder fallback | Check registered encoder/source IDs; try the next encoder if actual output startup fails. Show the active encoder and a CPU-load notice for x264. | Libobs API test double: missing ID, failed NVENC startup, successful x264. Further checks on real GPUs are required. |
+| 05 – save races | Dedicated session directory/ID, save guard, and thread joining. Old callbacks cannot modify new sessions. Reconfiguration is blocked during active saves/recordings; replay recovery preserves manual recording. | Reproduction of the old file-deletion bug; tests for two sessions, old callbacks, the save thread, and active manual output. |
+| 06 – microphone pointer | The same mutex protects FFI access and release. | Two-thread test: release waits until the borrow ends. |
+| 07 – partial initialization | `Engine::Drop` handles partially constructed objects as soon as libobs starts successfully. | 100 failed pipeline-construction cycles: every created encoder and libobs instance is released in the test double. |
+| 08 – settings | Normalize on load, require even and bounded resolution, and repair or reject invalid/NUL-containing values. Apply to the engine before saving the file; roll back on error. Serialize writes and operations. | Original extreme-resolution reproduction; invalid JSON/values; 160 file saves across 16 threads; rejection of reconfiguration during active recording. Actual driver rollback failures require a separate run. |
+| 09 – idle audio source | Microphone disabled in new settings. Audio sources live only while recording is requested and are released when disabled/idle. Failed startup clears the request. | Idle/off and failed-startup tests. WASAPI device opening was not measured on this machine. |
+| 10 – MP4, finalization | Manual recordings use fragmented MP4 with regular flushing. Finalization timeout/error code/empty file does not emit a successful save event; partial files are preserved. | Real interruption of synthetic FFmpeg recording; native tests for empty and failed output. The last fragment may still be lost during a power outage. |
+| 11 – CSP, IPC, media | CSP and application commands restricted to the main window; the toast only listens for events. Video-only protocol checks the current root folder on every request. Folder changes require the native picker. | Configuration tests; rejection of non-video/unrelated files; revocation of access to the previous root; toast restrictions; bounded HTTP ranges. Not a full penetration test. |
+| 12 – OBS bundle | Pinned SHA256 for OBS and FFmpeg; ZIP path validation; dedicated destination checks; per-file cache verification; checked cleanup of owned temporary folders on error paths too. | PowerShell tests with manipulated paths/hashes/cache; real bundling and repeated cache verification. The local manifest is not a signature that protects against a local attacker. |
+| 13 – GLib | Verified `0.18.5` source archive, two-line backport of upstream `PR #1343`, Cargo patch. | Linux release test: original SIGSEGV, patched success. The version remains 0.18.5, so version-based audits may still flag it. |
+| 14 – updater race | After downloading, recheck current engine state under the same operation lock that protects recording startup. An installation flag blocks new starts. | A recording started during download prevents installation; in 100 two-thread races, the two operations cannot both succeed. No real installer was run. |
+| 15 – hotkey capture | Stop on blur, hidden document, unmount/AbortSignal, or a 30 s timeout. Release capture even on IPC errors; native focus-loss handling and a 35 s guard provide protection. | Frontend: blur, timeout, unmount during pending IPC, IPC rejection. |
+| 16 – gallery | Removed the 500-item cutoff; file discovery runs on a blocking worker thread. The UI paginates in groups of 60 and shows total size. | Native test with 510 files, opening the 501st clip in the React UI. The complete metadata list is still loaded into memory; indexing is not database-backed. |
+| 17 – clock rollback | Disk retention and trimming use `Instant`; wall-clock time is used only for filenames/UI. | Reproduced overflow with the original backward-moving clock; tested the new retention algorithm with monotonic timestamps. |
+| 18 – other resources | Load IndexedDB images only when visible; 32 MiB target for inactive RAM cache; URL/listener/failed-entry cleanup. Consistent 5 Mbps minimum. Bounded log queue, 5 MiB active log plus previous log. Poll microphone every 200 ms outside PTT mode. CI action SHAs, pinned Node/Rust, write permission only in the publish job. | Cache visibility/deletion, preservation of 5 Mbps, 1,000 log lines and a large old log, workflow permission tests. Visible tiles may temporarily push the cache above its target. |
 
-## Lefutott ellenőrzések
+## Checks completed
 
-- Windows: 31 natív regressziós teszt sikeres (Rust 1.97.1, GNU target).
-- Frontend: 11 Vitest teszt és 3 Node konfigurációs teszt sikeres.
-- PowerShell: 14 csomagolási ellenőrzés sikeres.
-- Linux: optimalizált GLib regresszió sikeres, az eredeti hibát ugyanott reprodukáltuk.
-- Szintetikus MP4-megszakítás: régi hibás, új dekódolható.
-- TypeScript és Vite production build sikeres; `npm audit --omit=dev`: 0 ismert sérülékenység.
-- Valódi OBS/FFmpeg bundle felépült és SHA256-tal ellenőrzött; a következő futás ellenőrzött cache-t használt.
-- Böngészős UI-próba: Magyar/English US választás, mentés utáni azonnali fordítás, Infó és GitHub ikon.
-- `git diff --check` sikeres.
+- Windows: 31 native regression tests passed (Rust 1.97.1, GNU target).
+- Frontend: 11 Vitest tests and 3 Node configuration tests passed.
+- PowerShell: 14 packaging checks passed.
+- Linux: optimized GLib regression passed; the original failure was reproduced in the same environment.
+- Synthetic MP4 interruption: old output broken, new output decodable.
+- TypeScript and Vite production build passed; `npm audit --omit=dev`: 0 known vulnerabilities.
+- Real OBS/FFmpeg bundle built and verified with SHA256; the next run used the verified cache.
+- Browser UI check: Hungarian/English US selection, immediate translation after saving, Info section, and GitHub icon.
+- `git diff --check` passed.
 
-A helyi GNU linker `.rsrc merge failure: multiple non-default manifests` figyelmeztetést adott;
-a tesztprogramok sikeresen futottak. Aláírt telepítő és MSVC-release ebben a futásban nem készült.
+The local GNU linker reported `.rsrc merge failure: multiple non-default manifests`;
+the test programs ran successfully. No signed installer or MSVC release was built in this run.
 
-## Ismétlés és korlátok
+## Repeating the checks and limitations
 
-A szokásos parancsok a README-ben vannak. A régi forrás reprodukciójához `rustc` és megfelelő
-linker kell a PATH-ban. Windows GNU target esetén a script `gcc` linkert választ.
-Linux GLib külön, csak olvasható repository-mounttal:
+The usual commands are in the README. Reproducing the old source requires `rustc` and a suitable
+linker on PATH. For the Windows GNU target, the script selects the `gcc` linker.
+Run the Linux GLib check separately with a read-only repository mount:
 
 ```powershell
 docker run --rm --name clipcat-glib-regression --mount "type=bind,source=$PWD,target=/source,readonly" rust:1.97.1-slim@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c sh /source/tests/linux-glib.sh
 ```
 
-Nem történt valódi képernyő-/mikrofonrögzítés, telepítés, frissítőtelepítés, fizikai lemezbetöltés
-vagy hosszú GPU/SSD terhelés. A teljes Linux Tauri GUI és a CI-workflow még külön futtatandó.
-A natív motor tesztjei a saját életciklus- és szinkronizációs kódot ellenőrzik libobs-tesztduplával;
-nem bizonyítják egy adott driver vagy mikrofon hibamentességét. A libobs/driver belső elakadására
-nincs általános megszakítási garancia.
+No real screen/microphone recording, installation, updater installation, physical disk filling,
+or prolonged GPU/SSD load was performed. The full Linux Tauri GUI and CI workflow still need separate runs.
+Native engine tests check our lifecycle and synchronization code with a libobs test double;
+they do not establish that a particular driver or microphone is fault-free. There is no general
+cancellation guarantee for internal libobs/driver hangs.
 
-Összeomlás után saját, elkülönített puffer-session könyvtár maradhat a puffer mappában.
-A program ismeretlen korábbi sessionöket nem töröl automatikusan; a szabadhely-védelem ezek
-helyfoglalását is figyelembe veszi. Befejezett felvételeket automatikus tárhelyfelszabadítás nem töröl.
+A crash may leave an isolated buffer-session directory in the buffer folder.
+The application does not automatically delete unknown previous sessions; free-space protection
+accounts for their disk usage too. Automatic space reclamation never deletes completed recordings.
 
-## Elsődleges források
+## Primary sources
 
-- A Windows megjelenítési nyelvéhez: [GetUserDefaultUILanguage](https://learn.microsoft.com/en-us/windows/win32/api/winnls/nf-winnls-getuserdefaultuilanguage).
-- Jogosultságokhoz: [Tauri capabilities](https://v2.tauri.app/security/capabilities/).
-- Az encoder konstrukció és a tényleges inicializálás megkülönböztetéséhez: [OBS 32.2.2 obs-encoder.c](https://github.com/obsproject/obs-studio/blob/32.2.2/libobs/obs-encoder.c).
-- A muxeropciók átadásához: [OBS 32.2.2 ffmpeg-mux.c](https://github.com/obsproject/obs-studio/blob/32.2.2/plugins/obs-ffmpeg/ffmpeg-mux/ffmpeg-mux.c).
-- GLib: [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html), [upstream javítás](https://github.com/gtk-rs/gtk-rs-core/pull/1343), [helyi backport leírása](../src-tauri/vendor/glib/CLIPCAT-PATCH.md).
+- Windows display language: [GetUserDefaultUILanguage](https://learn.microsoft.com/en-us/windows/win32/api/winnls/nf-winnls-getuserdefaultuilanguage).
+- Permissions: [Tauri capabilities](https://v2.tauri.app/security/capabilities/).
+- Distinguishing encoder construction from actual initialization: [OBS 32.2.2 obs-encoder.c](https://github.com/obsproject/obs-studio/blob/32.2.2/libobs/obs-encoder.c).
+- Passing muxer options: [OBS 32.2.2 ffmpeg-mux.c](https://github.com/obsproject/obs-studio/blob/32.2.2/plugins/obs-ffmpeg/ffmpeg-mux/ffmpeg-mux.c).
+- GLib: [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html), [upstream fix](https://github.com/gtk-rs/gtk-rs-core/pull/1343), [local backport description](../src-tauri/vendor/glib/CLIPCAT-PATCH.md).

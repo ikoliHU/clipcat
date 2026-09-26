@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 export { invoke, listen };
 export const convertFileSrc = (path: string) => fileSrc(path, "clipcat");
 
-// A Rust oldali struktúrák (serde camelCase) tükörképei
+// Mirror the Rust structures (serde camelCase)
 
 export interface Settings {
   language: "hu" | "en-US";

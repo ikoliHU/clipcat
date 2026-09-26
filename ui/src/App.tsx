@@ -18,7 +18,7 @@ export function App() {
   const [gameFilter, setGameFilter] = useState("");
   const [playing, setPlaying] = useState<Clip | null>(null);
 
-  // A már nem létező klipek tárolt előnézete is törlődik
+  // Also delete stored thumbnails for clips that no longer exist
   const showClips = useCallback((list: Clip[]) => {
     setClips(list);
     pruneThumbs(new Set(list.map(tileKey)));
@@ -40,13 +40,13 @@ export function App() {
       listen<View>("open-view", (e) => setView(e.payload)),
       listen<UpdateState>("update", (e) => setUpdate(e.payload)),
       listen("locale-changed", () => { void loadLocale(); }),
-      // Az ablak elrejtésekor a lejátszás is leáll
+      // Stop playback when the window is hidden
       listen("main-hidden", () => setPlaying(null)),
     ];
     return () => unlisten.forEach((p) => p.then((off) => off()));
   }, [loadClips]);
 
-  // A galéria minden megnyitáskor frissül
+  // Refresh the gallery every time it opens
   useEffect(() => {
     if (view === "gallery") loadClips();
   }, [view, loadClips]);

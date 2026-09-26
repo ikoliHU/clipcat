@@ -1,18 +1,18 @@
-//! Melyik mappába kerüljön a klip: a mentés pillanatában előtérben lévő ablak alapján.
+//! Choose the clip folder based on the foreground window at the time of saving.
 
 use crate::platform::WindowInfo;
 
 pub const DESKTOP_FOLDER: &str = "Desktop";
 
 struct Rule {
-    /// exe neve kisbetűvel
+    /// Lowercase exe name
     exe: &'static str,
-    /// Az ablakcím elejének egyeznie kell (pl. Java alapú játékoknál)
+    /// The window title must start with this text (e.g. for Java-based games)
     title_prefix: Option<&'static str>,
     folder: &'static str,
 }
 
-/// Az exe-nevek Windowson kiterjesztéssel, Linuxon anélkül szerepelnek.
+/// Exe names include the extension on Windows and omit it on Linux.
 const RULES: &[Rule] = &[
     Rule { exe: "league of legends.exe", title_prefix: None, folder: "League of Legends" },
     Rule { exe: "leagueclientux.exe", title_prefix: None, folder: "League of Legends" },
@@ -22,8 +22,8 @@ const RULES: &[Rule] = &[
     Rule { exe: "java", title_prefix: Some("Minecraft"), folder: "Minecraft" },
 ];
 
-/// Nem játékok: ha ezek futnak teljes képernyőn (film, böngésző), a klip a Desktop mappába kerül,
-/// különben az ablakcím (pl. egy film fájlneve) lenne a mappa neve.
+/// Non-games: when these run fullscreen (movie, browser), save the clip in the Desktop folder;
+/// otherwise the window title (e.g. a movie filename) would become the folder name.
 const NON_GAMES: &[&str] = &[
     "vlc.exe", "mpv.exe", "mpc-hc.exe", "mpc-hc64.exe", "mpc-be64.exe", "potplayermini64.exe",
     "wmplayer.exe", "microsoft.media.player.exe", "video.ui.exe", "photos.exe", "chrome.exe",
@@ -64,7 +64,7 @@ fn clean_title(title: &str) -> String {
     }
     let name = name.replace('*', "");
     let mut words: Vec<&str> = name.split_whitespace().collect();
-    // Záró verziószám eltávolítása: "1.21.1", "v2.0"
+    // Remove a trailing version number: "1.21.1", "v2.0"
     if words.len() > 1 {
         let last = words[words.len() - 1].trim_start_matches(['v', 'V']);
         if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit() || c == '.') {

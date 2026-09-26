@@ -1,5 +1,5 @@
-//! Windows: a ClipCat mellé telepített motormappa (obs\, a bundle-obs.ps1 készíti az OBS portable
-//! zipjéből), ennek hiányában a telepített OBS Studio. Játékrögzítés, WASAPI hang, NVENC.
+//! Windows: use the engine folder installed alongside ClipCat (obs\, created by bundle-obs.ps1 from
+//! the OBS portable zip), or fall back to installed OBS Studio. Game capture, WASAPI audio, NVENC.
 
 use super::{Api, Data, Layout, Ptr};
 use crate::logfile;
@@ -10,9 +10,9 @@ use std::ptr::null_mut;
 
 use crate::i18n::tf;
 
-/// Tartalék, ha a ClipCat saját motormappája (obs\) hiányzik.
+/// Fallback when ClipCat's own engine folder (obs\) is missing.
 const INSTALLED_OBS_DIR: &str = r"C:\Program Files\obs-studio";
-/// Ezeket a libobs a futó exe mellett keresi, ezért az OBS-ből a ClipCat mellé másoljuk őket.
+/// libobs looks for these next to the running exe, so copy them from OBS to the ClipCat folder.
 const HELPER_EXES: &[&str] = &["obs-ffmpeg-mux.exe", "obs-nvenc-test.exe"];
 
 pub const NOT_INSTALLED: &str = "engine.notInstalled";
@@ -42,12 +42,12 @@ pub fn locate() -> Option<Layout> {
         })
 }
 
-/// A képernyőrögzítő forrás azonosítói, az elsőként létrehozhatóval
+/// Screen capture source IDs, using the first one that can be created
 pub fn display_sources() -> &'static [&'static str] {
     &["monitor_capture"]
 }
 
-/// (modul, kötelező-e)
+/// (module, required)
 pub fn modules() -> Vec<(&'static str, bool)> {
     vec![("win-capture", true), ("win-wasapi", true), ("obs-ffmpeg", true), ("obs-nvenc", false), ("obs-x264", false)]
 }
@@ -63,12 +63,12 @@ pub fn open(layout: &Layout) -> Result<libloading::Library, String> {
         sync_file(&bin.join(exe), &app_dir.join(exe));
     }
 
-    // A pluginok függőségei (avcodec, obs.dll, libobs-d3d11 …) az OBS bin mappájában vannak;
-    // a gyerekfolyamatok (muxer, NVENC-teszt) a PATH-ból találják meg őket.
+    // Plugin dependencies (avcodec, obs.dll, libobs-d3d11 …) are in the OBS bin directory;
+    // child processes (muxer, NVENC test) find them through PATH.
     crate::platform::add_dll_directory(&bin.to_string_lossy());
     let path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{};{path}", bin.display()));
-    // A libobs az adatfájljait ehhez képest is keresi (../../data/libobs)
+    // libobs also looks for its data files relative to this path (../../data/libobs)
     let _ = std::env::set_current_dir(&bin);
 
     unsafe { Library::load_with_flags(&layout.lib, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) }
@@ -80,24 +80,24 @@ fn sync_file(src: &Path, dst: &Path) {
     let meta = |p: &Path| std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
     if src.exists() && meta(src) != meta(dst) {
         if let Err(e) = std::fs::copy(src, dst) {
-            logfile::write(&format!("{} nem másolható: {e}", dst.display()));
+            logfile::write(&format!("Cannot copy {}: {e}", dst.display()));
         }
     }
 }
 
-/// A lemezes puffer vágója: a motormappába csomagolt statikus ffmpeg.exe (bundle-obs.ps1)
+/// Disk buffer trimmer: the static ffmpeg.exe bundled in the engine folder (bundle-obs.ps1)
 pub fn ffmpeg() -> Option<PathBuf> {
     let bundled = exe_dir().join(r"obs\ffmpeg\ffmpeg.exe");
     bundled.exists().then_some(bundled)
 }
 
-/// Lezárta-e már a muxer a fájlt: amíg nyitva tartja, kizárólagosan nem nyitható meg.
+/// Whether the muxer has closed the file: exclusive access fails while it is still open.
 pub fn file_closed(path: &Path) -> bool {
     use std::os::windows::fs::OpenOptionsExt;
     std::fs::OpenOptions::new().read(true).share_mode(0).open(path).is_ok()
 }
 
-/// Ne villanjon fel konzolablak a segédprogram futtatásakor
+/// Prevent a console window from flashing when running a helper program
 pub fn hide_console(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -130,7 +130,7 @@ extern "C" {
     fn __stdio_common_vsprintf(options: u64, buffer: *mut c_char, count: usize, format: *const c_char, locale: Ptr, args: Ptr) -> c_int;
 }
 
-/// A libobs printf-stílusú naplóüzenetének kifejtése
+/// Expand a libobs printf-style log message
 pub unsafe fn vsnprintf(buffer: &mut [c_char], format: *const c_char, args: Ptr) {
     const STANDARD_SNPRINTF_BEHAVIOR: u64 = 2;
     __stdio_common_vsprintf(STANDARD_SNPRINTF_BEHAVIOR, buffer.as_mut_ptr(), buffer.len(), format, null_mut(), args);

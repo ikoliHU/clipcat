@@ -26,7 +26,7 @@
       },
       {
         "label": "toast",
-        "title": "ClipCat értesítés",
+        "title": "ClipCat notification",
         "url": "toast.html",
         "width": 380,
         "height": 96,
@@ -53,7 +53,7 @@
       "icons/icon.png"
     ],
     "publisher": "Peter",
-    "shortDescription": "ShadowPlay-szerű visszajátszás-rögzítő"
+    "shortDescription": "ShadowPlay-style replay recorder"
   },
   "plugins": {
     "updater": {

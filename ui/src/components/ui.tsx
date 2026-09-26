@@ -13,7 +13,7 @@ const BUTTON_VARIANTS = {
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: keyof typeof BUTTON_VARIANTS;
-  /** Teljes szélesség, a tartalom a két szélre igazítva (oldalsáv) */
+  /** Full width, with content aligned to both edges (sidebar) */
   wide?: boolean;
 }
 
@@ -52,7 +52,7 @@ export function LinkButton({ accent, className, ...props }: ButtonHTMLAttributes
   );
 }
 
-// ---------- Beviteli mezők ----------
+// ---------- Input fields ----------
 
 const FIELD =
   "h-8 min-w-[220px] rounded-lg bg-panel-2 px-2.5 text-fg shadow-[inset_0_0_0_1px_var(--color-line)] transition duration-150 hover:bg-panel-3";
@@ -86,7 +86,7 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
   );
 }
 
-// Csúszka: vékony sáv kitöltéssel, fehér gomb árnyékkal
+// Slider: thin filled track, white thumb with a shadow
 export function Range({ value, min, max, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "min" | "max"> & { value: number; min: number; max: number }) {
   const fill = `${((value - min) / (max - min)) * 100}%`;
   return (
@@ -151,9 +151,9 @@ export function Keycap({ active, className, ...props }: ButtonHTMLAttributes<HTM
   );
 }
 
-// ---------- Beállítás-lista ----------
+// ---------- Settings list ----------
 
-// Csoportosított lista: a szakaszcím a csoport fölött, beljebb húzott elválasztók
+// Grouped list: section heading above the group, inset separators
 export function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>

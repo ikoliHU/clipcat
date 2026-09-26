@@ -11,12 +11,12 @@ interface Props {
   onDelete: (clip: Clip) => void;
 }
 
-// Kiemelés elsötétítéssel: a háttér hátrébb kerül, a lejátszó "anyagként" érkezik.
-// A modal mindig a DOM-ban van, hogy a be- és kiúszás animálható legyen.
+// Highlight by dimming: the background recedes while the player arrives as a material surface.
+// Keep the modal in the DOM so its entrance and exit can be animated.
 export function Player({ clip, onClose, onDelete }: Props) {
   const video = useRef<HTMLVideoElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Bezárás után is az utolsó klip adatai látszanak, amíg a modal elhalványul
+  // Keep the last clip's details visible while the modal fades out after closing
   const [shown, setShown] = useState<Clip | null>(null);
   const open = !!clip;
 

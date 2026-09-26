@@ -7,7 +7,7 @@ import type { Toast as ToastPayload } from "./lib/tauri";
 import "./index.css";
 
 function Toast() {
-  // A számláló új kulcsot ad minden értesítésnek, így az animáció egymást követő értesítéseknél is újraindul
+  // Give each notification a new key so the animation restarts for consecutive notifications
   const [toast, setToast] = useState<(ToastPayload & { id: number }) | null>(null);
 
   useEffect(() => {

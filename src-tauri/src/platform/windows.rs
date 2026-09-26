@@ -1,5 +1,5 @@
-//! Vékony Win32 réteg: monitorok, előtérben lévő ablak, folyamatok, értesítés-ablak, lomtár,
-//! Explorer, automatikus indítás (Run kulcs), mappák.
+//! Thin Win32 layer: monitors, foreground window, processes, notification window, recycle bin,
+//! Explorer, autostart (Run key), directories.
 
 use super::{Monitor, WindowInfo};
 use crate::logfile;
@@ -39,7 +39,7 @@ const FOF_NOERRORUI: u16 = 0x400;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "ClipCat";
-/// Az átnevezés előtti autostart-bejegyzés
+/// Autostart entry from before the rename
 const LEGACY_RUN_VALUE: &str = "ReplayTray";
 
 fn wide(s: &str) -> Vec<u16> {
@@ -91,8 +91,8 @@ unsafe fn monitor_rect(monitor: HMONITOR) -> Option<RECT> {
     (GetMonitorInfoW(monitor, &mut info) != 0).then_some(info.rcMonitor)
 }
 
-/// Annak a monitornak a téglalapja, amelyet az ablak teljesen lefed (teljes képernyős alkalmazás).
-/// A maximalizált ablak a láthatatlan kerete miatt is lefedheti a monitort, de az nem teljes képernyő.
+/// The rectangle of the monitor fully covered by the window (fullscreen application).
+/// A maximized window may cover the monitor due to its invisible frame without being fullscreen.
 unsafe fn fullscreen_monitor(hwnd: HWND) -> Option<RECT> {
     if hwnd.is_null() || IsZoomed(hwnd) != 0 {
         return None;
@@ -105,8 +105,8 @@ unsafe fn fullscreen_monitor(hwnd: HWND) -> Option<RECT> {
     (window.left <= m.left && window.top <= m.top && window.right >= m.right && window.bottom >= m.bottom).then_some(m)
 }
 
-/// Az értesítés helye: ha teljes képernyős alkalmazás (játék) van előtérben, annak a monitora,
-/// egyébként a fő monitor.
+/// Notification location: the foreground fullscreen application's (game's) monitor,
+/// or the primary monitor otherwise.
 fn notification_monitor_rect() -> Option<RECT> {
     unsafe {
         fullscreen_monitor(GetForegroundWindow())
@@ -145,13 +145,13 @@ pub fn foreground_window() -> Option<WindowInfo> {
     }
 }
 
-/// Le van-e nyomva a billentyű vagy egérgomb (virtuális kód), bármelyik ablak is aktív.
+/// Whether a key or mouse button is pressed (virtual-key code), regardless of the active window.
 pub fn key_down(vk: u32) -> bool {
     unsafe { (GetAsyncKeyState(vk as i32) as u16) & 0x8000 != 0 }
 }
 
-/// A RegisterHotKey eseményét egyes játékok elnyelik. A fizikai billentyűállapotból
-/// ugyanazt a kombinációt felismerjük, így azok fókuszában is működnek a gyorsbillentyűk.
+/// Some games swallow RegisterHotKey events. Detect the same combination from physical key states
+/// so hotkeys work while those games have focus as well.
 pub fn shortcut_down(shortcut: &Shortcut) -> bool {
     let modifier = |pressed, wanted| pressed == wanted;
     modifier(key_down(0x10), shortcut.mods.contains(Modifiers::SHIFT))
@@ -161,7 +161,7 @@ pub fn shortcut_down(shortcut: &Shortcut) -> bool {
         && key_to_vk(shortcut.key).is_some_and(key_down)
 }
 
-/// Ugyanaz a Code -> Windows virtual-key leképezés, amelyet a global-hotkey használ.
+/// The same Code -> Windows virtual-key mapping used by global-hotkey.
 fn key_to_vk(key: Code) -> Option<u32> {
     Some(match key {
         Code::KeyA => 0x41,
@@ -282,7 +282,7 @@ fn key_to_vk(key: Code) -> Option<u32> {
     })
 }
 
-/// Helyi idő a megadott mintával: %Y %m %d %H %M %S.
+/// Local time using the given format: %Y %m %d %H %M %S.
 pub fn local_time(pattern: &str) -> String {
     let t = unsafe {
         let mut t = zeroed();
@@ -298,7 +298,7 @@ pub fn local_time(pattern: &str) -> String {
         .replace("%S", &format!("{:02}", t.wSecond))
 }
 
-/// A libobs pluginjai és azok függőségei innen is betölthetők legyenek.
+/// Allow libobs plugins and their dependencies to be loaded from here as well.
 pub fn add_dll_directory(path: &str) {
     let path = wide(path);
     unsafe {
@@ -307,14 +307,14 @@ pub fn add_dll_directory(path: &str) {
     }
 }
 
-/// Az értesítés-ablak soha ne vegye el a fókuszt a játéktól, és ne jelenjen meg az alt-tab listában.
+/// The notification window must never take focus from the game or appear in the alt-tab list.
 pub fn prepare_overlay(window: &WebviewWindow) {
     if let Ok(hwnd) = window.hwnd() {
         make_overlay(hwnd.0 as _);
     }
 }
 
-/// Az értesítés-ablakot fókuszváltás nélkül jeleníti meg az értesítési monitor jobb felső sarkában.
+/// Show the notification window in the notification monitor's top-right corner without changing focus.
 pub fn show_overlay(window: &WebviewWindow, margin: i32) {
     if let (Some(area), Ok(size), Ok(hwnd)) = (notification_monitor_rect(), window.outer_size(), window.hwnd()) {
         let x = area.right - size.width as i32 - margin;
@@ -346,15 +346,15 @@ fn show_no_activate(hwnd: HWND, x: i32, y: i32) {
     }
 }
 
-/// A Tauri nem tud a Win32-vel megjelenített ablakról, ezért az elrejtés is Win32-vel történik.
-/// Egy látható, bár átlátszó, mindig felül lévő ablak a játék fölött rontaná a megjelenítés késleltetését.
+/// Tauri is unaware of windows shown through Win32, so hide them through Win32 as well.
+/// A visible, even transparent, always-on-top window over the game would increase presentation latency.
 fn hide(hwnd: HWND) {
     unsafe {
         ShowWindow(hwnd, SW_HIDE);
     }
 }
 
-/// Lomtárba helyezés (visszaállítható törlés).
+/// Move to the recycle bin (recoverable deletion).
 pub fn recycle(path: &str) -> bool {
     let mut from: Vec<u16> = OsStr::new(path).encode_wide().collect();
     from.extend([0, 0]);
@@ -397,7 +397,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     }
 }
 
-/// A felhasználó Videók mappája (akkor is, ha áthelyezte, pl. OneDrive-ra)
+/// The user's Videos folder (even if moved, e.g. to OneDrive)
 pub fn videos_dir() -> PathBuf {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     RegKey::predef(HKEY_CURRENT_USER)
@@ -407,7 +407,7 @@ pub fn videos_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into())).join("Videos"))
 }
 
-/// A beállítások helye: az exe mappája (felhasználói telepítés, írható; az eltávolító törli)
+/// Settings location: the exe folder (per-user installation, writable; removed by the uninstaller)
 pub fn config_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -415,7 +415,7 @@ pub fn config_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Napló és egyéb futási állapot: %LOCALAPPDATA%\ClipCat
+/// Logs and other runtime state: %LOCALAPPDATA%\ClipCat
 pub fn state_dir() -> PathBuf {
     PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join("ClipCat")
 }
@@ -434,7 +434,7 @@ fn cleanup_legacy(state_dir: &std::path::Path, config_dir: &std::path::Path) {
         let _ = std::fs::remove_file(state_dir.join(file));
     }
     let _ = std::fs::remove_file(config_dir.join("shadowplay.lua"));
-    logfile::write("A korábbi, külön OBS-folyamatos működés maradványai eltávolítva");
+    logfile::write("Removed remnants of the legacy separate-OBS-process setup");
 }
 
 #[cfg(test)]
